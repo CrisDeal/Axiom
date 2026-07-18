@@ -1,8 +1,11 @@
 <?php
+declare(strict_types=1);
+
 namespace Axiom\Http\Router;
 
 use Axiom\DI\Container;
 use Axiom\Exceptions\ErrorHandler;
+use Axiom\Exceptions\MethodNotAllowedException;
 use Axiom\Exceptions\NotFoundException;
 
 /**
@@ -13,15 +16,30 @@ use Axiom\Exceptions\NotFoundException;
  * por el pipeline de middlewares configurado.
  *
  * Uso básico:
+ *   $router->get('/', function($req, $res) {...});
  *   $router->get('/users', [UserController::class, 'index']);
- *   $router->post('/users', [UserController::class, 'store'])->middleware(AuthMiddleware::class);
+ *   $router->post('/users', [UserController::class, 'store'])
+ *      ->middleware(AuthMiddleware::class);
+ * 
  *   $router->verifyRoutes();
  */
-class Router {
+class Router 
+{
+    private const FOUND = 'FOUND';
+    private const NOT_FOUND = 'NOT_FOUND';
+    private const METHOD_NOT_ALLOWED = 'METHOD_NOT_ALLOWED';
 
     /**
      * Rutas registradas indexadas por método HTTP y URL.
-     * Estructura: ['GET' => ['/url' => ['action' => ..., 'middlewares' => [...]]]]
+     * Estructura: 
+     *  [
+     *      'GET' => [
+     *          '/url' => [
+     *              'action' => [UrlController::class, 'index'], 
+     *              'middlewares' => [...]
+     *          ]
+     *      ]
+     *  ]
      *
      * @var array<string, array<string, array>>
      */
@@ -50,13 +68,14 @@ class Router {
 
     /**
      * Registra una ruta en el mapa interno del Router.
-     * Retorna $this para permitir encadenamiento con ->middleware().
      *
      * @param string         $method Método HTTP en mayúsculas. Ejemplo: 'GET'
      * @param string         $url    Ruta. Soporta parámetros dinámicos: '/users/{id}'
      * @param callable|array $fn     Callable o [ControllerClass::class, 'method']
+     * @return self          $this   Permite encadenamiento con ->middleware()
      */
-    public function addRoute(string $method, string $url, callable|array $fn) : self {
+    public function addRoute(string $method, string $url, callable|array $fn) : self 
+    {
         $this->routes[$method][$url] = [
             'action'      => $fn,
             'middlewares' => []
@@ -103,7 +122,8 @@ class Router {
      * @param  string ...$middlewares Clases de middleware a aplicar en orden.
      * @throws \LogicException Si se llama sin haber registrado una ruta antes.
      */
-    public function middleware(string ...$middlewares) : self {
+    public function middleware(string ...$middlewares) : self 
+    {
         if(empty($this->lastRoute)) {
             throw new \LogicException('No se ha definido ninguna ruta aún para asignar middleware.');
         }
@@ -126,19 +146,53 @@ class Router {
      * ejecuta el pipeline de middlewares y despacha al controlador.
      * Cualquier excepción no capturada es delegada al ErrorHandler.
      */
-    public function verifyRoutes(): void {
+    // public function verifyRoutes(): void 
+    // {
+    //     try {
+    //         $routeData = $this->matchRoute($this->request);
+
+    //         if(!$routeData) {
+    //             throw new NotFoundException("La ruta '{$this->request->url}' no existe.");
+    //         }
+
+    //         $this->dispatch($routeData);
+
+    //         if(!$this->response->hasBeenSent()) {
+    //             throw new \LogicException('No se envió ninguna respuesta para esta ruta.');
+    //         }
+    //     } catch(\Throwable $e) {
+    //         $this->handleException($e);
+    //     }
+    // }
+    public function verifyRoutes(): void
+    {
         try {
-            $routeData = $this->matchRoute($this->request);
 
-            if(!$routeData) {
-                throw new NotFoundException("La ruta '{$this->request->url}' no existe.");
+            $result = $this->matchRoute($this->request);
+
+            switch($result['status']) {
+
+                case self::FOUND:
+                    $this->dispatch($result['route']);
+                    break;
+
+                case self::METHOD_NOT_ALLOWED:
+                    throw new MethodNotAllowedException(
+                        $result['allowed']
+                    );
+
+                case self::NOT_FOUND:
+                    throw new NotFoundException(
+                        "La ruta '{$this->request->url}' no existe."
+                    );
             }
-
-            $this->dispatch($routeData);
 
             if(!$this->response->hasBeenSent()) {
-                throw new \LogicException('No se envió ninguna respuesta para esta ruta.');
+                throw new \LogicException(
+                    'No se envió ninguna respuesta para esta ruta.'
+                );
             }
+
         } catch(\Throwable $e) {
             $this->handleException($e);
         }
@@ -156,30 +210,95 @@ class Router {
      *
      * @return array|null Datos de la ruta encontrada, o null si no hay match.
      */
-    private function matchRoute(Request $req): ?array {
-        $routes = $this->routes[$req->method] ?? [];
+    // private function matchRoute(Request $req): ?array 
+    // {
+    //     $routes = $this->routes[$req->method] ?? [];
 
-        // Match estático — O(1), se evalúa primero por rendimiento.
-        if(isset($routes[$req->url])) {
-            return $routes[$req->url];
-        }
+    //     // Match estático — O(1), se evalúa primero por rendimiento.
+    //     if(isset($routes[$req->url])) {
+    //         return $routes[$req->url];
+    //     }
 
-        // Match dinámico — convierte {param} en grupo regex nombrado.
-        foreach($routes as $route => $data) {
-            $pattern = preg_replace('/\{([a-zA-Z0-9_]+)\}/', '(?P<\1>[^/]+)', $route);
-            $pattern = '#^' . $pattern . '$#';
+    //     // Match dinámico — convierte {param} en grupo regex nombrado.
+    //     foreach($routes as $route => $data) {
+    //         $pattern = preg_replace('/\{([a-zA-Z0-9_]+)\}/', '(?P<\1>[^/]+)', $route);
+    //         $pattern = '#^' . $pattern . '$#';
 
-            if(preg_match($pattern, $req->url, $matches)) {
+    //         if(preg_match($pattern, $req->url, $matches)) {
+    //             foreach($matches as $key => $value) {
+    //                 if(is_string($key)) {
+    //                     $req->params[$key] = $value;
+    //                 }
+    //             }
+    //             return $data;
+    //         }
+    //     }
+
+    //     return null;
+    // }
+
+    private function matchRoute(Request $req): array
+    {
+        $allowedMethods = [];
+
+        foreach($this->routes as $method => $routes) {
+
+            // Match estático
+            if(isset($routes[$req->url])) {
+
+                if($method === $req->method) {
+                    return [
+                        'status' => self::FOUND,
+                        'route'  => $routes[$req->url]
+                    ];
+                }
+
+                $allowedMethods[] = $method;
+            }
+
+            // Match dinámico
+            foreach($routes as $route => $data) {
+
+                $pattern = preg_replace(
+                    '/\{([a-zA-Z0-9_]+)\}/',
+                    '(?P<\1>[^/]+)',
+                    $route
+                );
+
+                $pattern = '#^' . $pattern . '$#';
+
+                if(!preg_match($pattern, $req->url, $matches)) {
+                    continue;
+                }
+
+                if($method !== $req->method) {
+                    $allowedMethods[] = $method;
+                    continue;
+                }
+
                 foreach($matches as $key => $value) {
                     if(is_string($key)) {
                         $req->params[$key] = $value;
                     }
                 }
-                return $data;
+
+                return [
+                    'status' => self::FOUND,
+                    'route'  => $data
+                ];
             }
         }
 
-        return null;
+        if(!empty($allowedMethods)) {
+            return [
+                'status'  => self::METHOD_NOT_ALLOWED,
+                'allowed' => array_unique($allowedMethods)
+            ];
+        }
+
+        return [
+            'status' => self::NOT_FOUND
+        ];
     }
 
     /**
@@ -191,7 +310,8 @@ class Router {
      *
      * @param array $routeData Datos de la ruta: action y middlewares.
      */
-    private function dispatch(array $routeData): void {
+    private function dispatch(array $routeData): void 
+    {
         $action      = $routeData['action'];
         $middlewares = $routeData['middlewares'];
 
@@ -223,7 +343,8 @@ class Router {
      * @param  callable $core        Controlador final del pipeline.
      * @return callable              Pipeline completo listo para ejecutar.
      */
-    private function buildMiddlewarePipeline(array $middlewares, callable $core): callable {
+    private function buildMiddlewarePipeline(array $middlewares, callable $core): callable 
+    {
         return array_reduce(
             array_reverse($middlewares),
             function($next, $middlewareClass) {
@@ -264,3 +385,20 @@ class Router {
 // ✅ Service Providers
 // ✅ Middleware globales
 // ✅ Route groups
+// No existe diferenciación entre 404 y 405
+// Las regex se compilan en cada request (cachear)
+
+// . No hay constraints
+// Actualmente:
+// /users/{id}
+
+// acepta:
+// /users/abc
+// /users/123
+// /users/!!!
+
+// Más adelante podrías soportar:
+// /users/{id:\d+}
+
+// para generar:
+// (?P<id>\d+)
