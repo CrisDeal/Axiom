@@ -1,0 +1,48 @@
+Documentar un framework backend en PHP como Axiom requiere una estructura lógica y progresiva. El objetivo es que cualquier desarrollador pueda entender la arquitectura y comenzar a utilizar las herramientas sin fricción. La mejor manera de gestionarlo es tratar la documentación como un producto técnico independiente.
+
+1. Herramientas Recomendadas
+El estándar de la industria es escribir el contenido en Markdown y utilizar un generador de sitios estáticos. Esto permite mantener los textos bajo control de versiones junto con el proyecto.
+
+VitePress o Docusaurus: Toman archivos Markdown y generan sitios web estáticos rápidos y bien estructurados. Son fáciles de desplegar y ofrecen un diseño muy pulido por defecto.
+
+MkDocs (con el tema Material): Es una de las opciones más fuertes para documentación puramente técnica debido a su excelente motor de búsqueda integrado y su sistema de navegación lateral.
+
+Repositorio / Wiki: Si requieres algo inmediato sin configuración de despliegue, la Wiki de GitHub o GitLab es funcional, aunque limita la personalización visual y la estructura a medida que el proyecto crece.
+
+2. Estructura de la Documentación
+La información debe organizarse de lo más básico y general a lo más técnico y específico. Una arquitectura de información sólida para un framework se divide de la siguiente manera:
+
+Primeros Pasos (Getting Started):
+
+Descripción del framework y su filosofía o casos de uso principales.
+
+Requisitos del sistema (versión mínima de PHP, extensiones necesarias).
+
+Guía de instalación paso a paso y configuración inicial.
+
+Conceptos Centrales (Core Concepts):
+
+Enrutador (Router): Cómo registrar rutas, manejar parámetros, verbos HTTP y agrupaciones.
+
+Peticiones y Respuestas (Request/Response): Explicación del ciclo de vida, cómo interactuar con los handlers para leer datos de entrada y emitir respuestas adecuadas.
+
+Componentes Adicionales:
+
+Implementación y uso del Cliente HTTP.
+
+Gestión de la base de datos y patrones arquitectónicos aplicados (por ejemplo, cómo utilizar la capa de abstracción o el patrón Active Record si está disponible).
+
+Arquitectura Avanzada:
+
+Explicación de los mecanismos internos, como el contenedor de Inyección de Dependencias.
+
+Referencia de API:
+
+Listado técnico de las clases públicas, métodos, parámetros y retornos esperados.
+
+3. Prácticas de Mantenimiento
+Actualización simultánea: Acostumbra que ninguna característica nueva se considere terminada si no incluye su respectiva actualización en la documentación.
+
+Prioriza los ejemplos: Las explicaciones teóricas son útiles, pero mostrar bloques de uso real de cómo se invoca una clase o método reduce significativamente la curva de aprendizaje.
+
+Versionado de la documentación: A medida que el framework evolucione, asegúrate de versionar los documentos. Si publicas cambios importantes que rompen la compatibilidad, los usuarios deben poder seguir consultando la documentación de versiones anteriores.
