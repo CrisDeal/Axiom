@@ -76,6 +76,26 @@ class Response {
     }
 
     /**
+     * Envía una respuesta de texto plano o HTML.
+     *
+     * @param string $content Texto o HTML a enviar.
+     * @param int $statusCode HTTP status code. Por defecto 200.
+     */
+    public function send(string $content, int $statusCode = 200): void {
+        $this->guardAgainstDoubleSend();
+        $this->sent = true;
+
+        $this->sendHeaders();
+        // Solo establecemos el Content-Type si el usuario no lo definió manualmente con withHeader()
+        if (!isset($this->headers['Content-Type']) && !isset($this->headers['content-type'])) {
+            header('Content-Type: text/html; charset=UTF-8');
+        }
+        
+        http_response_code($statusCode);
+        echo $content;
+    }
+
+    /**
      * Envía una respuesta con solo un status code y sin body.
      * Útil para respuestas 204 No Content, 304 Not Modified, etc.
      *
@@ -131,7 +151,7 @@ class Response {
      * @throws HttpException Si viewsPath no fue configurado.
      * @throws HttpException Si la vista o el layout no existen.
      */
-    public function render(string $view, array $data = [], ?string $layout = 'layout/MainLayout') : void{
+    public function render(string $view, array $data = [], ?string $layout = null) : void{
         $this->guardAgainstDoubleSend();
 
         if($this->viewsPath === null) {
@@ -149,7 +169,7 @@ class Response {
         header('Content-Type: text/html; charset=UTF-8');
 
         // Extrae $data como variables locales disponibles en la vista.
-        extract($data);
+        extract($data, EXTR_SKIP);
         
         // Captura el output de la vista en $content.
         // El try/finally garantiza que el buffer siempre se cierre,

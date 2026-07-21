@@ -5,7 +5,7 @@ namespace Axiom;
 
 use Axiom\Config\ConfigRepository;
 use Axiom\DI\Container;
-use Axiom\Http\Router\RouteGroup;
+use Axiom\Http\Router\MainRouter;
 use Axiom\Http\Router\Router;
 use Axiom\Providers\DatabaseServiceProvider;
 use Axiom\Providers\FetchServiceProvider;
@@ -18,16 +18,6 @@ use Axiom\Contracts\Providers\ServiceProviderInterface;
  * Punto de entrada del framework Axiom.
  * Orquesta el contenedor DI, los providers y el ciclo de vida de la peticion HTTP.
  * 
- * Uso como API pura:
- * $app = new Axiom();
- * $app->get('/users', [UserController::class, 'index']);
- * $app->run();
- * 
- * Uso con vistas:
- * $app = new Axiom();
- * $app->withViews(__DIR__ . '/../views');
- * $app->get('/', [HomeController::class, 'index']);
- * $app->run();
  */
 class Axiom {
 
@@ -44,12 +34,12 @@ class Axiom {
     private array $providers = [];
 
     /** Router interno - se resuelve del contenedor en boot() */
-    public Router $router;
+    public MainRouter $router;
 
     /** 
      * Rutas pendientes de registrar.
      * Se acumulan antes de boot() y se registran cuando el router este listo.
-     * Estructura: [['method' => 'GET', 'url' => '/ping', 'fn' => callable, 'middlewares' => []]]
+     * Estructura: [['method' => 'GET', 'url' => '/ping', 'action' => callable, 'middlewares' => []]]
      * 
      * @var array<int, array>
      */
@@ -92,28 +82,28 @@ class Axiom {
     // ====================================================================================
 
     /** Registra una ruta GET. */
-    public function get(string $url, callable|array $fn): static {
-        return $this->addPendingRoute('GET', $url, $fn);
+    public function get(string $url, callable|array $action): static {
+        return $this->addPendingRoute('GET', $url, $action);
     }
 
     /** Registra una ruta POST. */
-    public function post(string $url, callable|array $fn): static {
-        return $this->addPendingRoute('POST', $url, $fn);
+    public function post(string $url, callable|array $action): static {
+        return $this->addPendingRoute('POST', $url, $action);
     }
 
     /** Registra una ruta PUT. */
-    public function put(string $url, callable|array $fn): static {
-        return $this->addPendingRoute('PUT', $url, $fn);
+    public function put(string $url, callable|array $action): static {
+        return $this->addPendingRoute('PUT', $url, $action);
     }
 
     /** Registra una ruta PATCH. */
-    public function patch(string $url, callable|array $fn): static {
-        return $this->addPendingRoute('PATCH', $url, $fn);
+    public function patch(string $url, callable|array $action): static {
+        return $this->addPendingRoute('PATCH', $url, $action);
     }
 
     /** Registra una ruta DELETE. */
-    public function delete(string $url, callable|array $fn): static {
-        return $this->addPendingRoute('DELETE', $url, $fn);
+    public function delete(string $url, callable|array $action): static {
+        return $this->addPendingRoute('DELETE', $url, $action);
     }
 
     /**
@@ -135,11 +125,11 @@ class Axiom {
     /**
      * Acumula una ruta como pendiente hasta que boot() la registre.
      */
-    private function addPendingRoute(string $method, string $url, callable|array $fn): static {
+    private function addPendingRoute(string $method, string $url, callable|array $action): static {
         $this->pendingRoutes[] = [
             'method'      => $method,
             'url'         => $url,
-            'fn'          => $fn,
+            'action'          => $action,
             'middlewares' => []
         ];
 
@@ -155,19 +145,18 @@ class Axiom {
      *  $app->mount(require 'routes/users.php');
      *  $app->mount(require 'routes/products.php');
      * 
-     * @param RouteGroup $group Grupo de rutas a montar.
+     * @param Router $group Grupo de rutas a montar.
      */
-    public function mount(RouteGroup $group): static {
+    public function mount(Router $group): void {
         foreach ($group->getRoutes() as $route) {
             $this->pendingRoutes[] = $route;
             $this->lastPendingIndex = array_key_last($this->pendingRoutes);
         }
-        return $this;
     }
 
 
     /** 
-     * Inicializ la applicacion y despacha la peticion HTTP.
+     * Inicializar la applicacion y despacha la peticion HTTP.
      * Debe llamarse al final, despues de registrar rutas y providers.
      */
     public function run(): void {
@@ -244,7 +233,7 @@ class Axiom {
 
         foreach ($this->pendingRoutes as $route) {
             $this->router
-                ->addRoute($route['method'], $route['url'], $route['fn'])
+                ->addRoute($route['method'], $route['url'], $route['action'])
                 ->middleware(...$route['middlewares']);
         }
     }

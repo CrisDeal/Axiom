@@ -84,8 +84,17 @@ class Request {
      */
     public function __construct() {
         $currentUrl   = $_SERVER['REQUEST_URI'] ?? '/';
-        $this->url    = parse_url($currentUrl, PHP_URL_PATH ?? '/');
+        
+        $this->url    = (string) (parse_url($currentUrl, PHP_URL_PATH) ?: '/');
         $this->method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
+        if ($this->method === 'POST') {
+            if (isset($_POST['_method'])) {
+                $this->method = strtoupper($_POST['_method']);
+            } elseif (isset($_SERVER['HTTP_X_HTTP_METHOD_OVERRIDE'])) {
+                $this->method = strtoupper($_SERVER['HTTP_X_HTTP_METHOD_OVERRIDE']);
+            }
+        }
+
         $this->query  = $_GET;
         $this->files  = $_FILES;
 

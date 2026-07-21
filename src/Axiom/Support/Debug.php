@@ -1,4 +1,6 @@
 <?php
+declare(strict_types=1);
+
 namespace Axiom\Support;
 
 /**
@@ -23,7 +25,8 @@ class Debug {
      *
      * @param mixed $data Variable a inspeccionar.
      */
-    public static function dump(mixed $data): void {
+    public static function dump(mixed $data): void 
+    {
         echo '<pre>';
         var_dump($data);
         echo '</pre>';
@@ -43,7 +46,8 @@ class Debug {
      * @param mixed $data Variable a inspeccionar.
      * @return never      Siempre detiene la ejecución con exit.
      */
-    public static function dd(mixed $data): never {
+    public static function dd(mixed $data): never 
+    {
         echo "<pre>";
         var_dump($data);
         echo "</pre>";
@@ -64,7 +68,8 @@ class Debug {
      * @param  mixed $data Variable a inspeccionar.
      * @return never       Siempre detiene la ejecución.
      */
-    public static function ddd(mixed $data): never {
+    public static function ddd(mixed $data): never 
+    {
         echo '<pre>';
         var_dump($data);
         echo PHP_EOL;
@@ -84,7 +89,8 @@ class Debug {
      * @param  callable $fn       Función a medir.
      * @return string             Tiempo transcurrido en milisegundos.
      */
-    public static function measure(callable $fn): string {
+    public static function measure(callable $fn): string 
+    {
         $start = hrtime(true);
         $fn();
         $end = hrtime(true);
