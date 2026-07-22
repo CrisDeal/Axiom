@@ -29,7 +29,7 @@ Crea un archivo `composer.json` en la raíz de tu nuevo proyecto. Aquí tienes u
         }
     ],
     "require": {
-        "axiom/framework": "^0.1.0"
+        "axiom/framework": "v1.0.0", 
     },
     "autoload": {
         "psr-4": {
@@ -58,10 +58,14 @@ use \Axiom\Axiom;
 $app = new Axiom();
 
 // (Aquí se registrarán las rutas y configuraciones)
+
+$app->run();
 ```
 
-### 4. Configuración del Servidor (URL Rewriting)
-Debido a la arquitectura del framework, todas las peticiones HTTP deben ser redirigidas al punto de entrada (index.php) para que el Router interno pueda procesarlas.
+### 4. Configuración en Apache (URL Rewriting)
+En lugar de crear un archivo PHP para cada pantalla, todas las URLs pasan primero por `index.php`. Axiom examina la URL y decide qué código ejecutar.
+
+Debido a la arquitectura del framework, todas las peticiones HTTP deben ser redirigidas al punto de entrada (`index.php`) para que el Router interno pueda procesarlas.
 
 Para habilitar esto en el servidor, crea un archivo .htaccess en el mismo nivel que tu index.php con la siguiente configuración:
 
@@ -113,7 +117,7 @@ $app->get('/ping', function() {
 ```
 
 ### 2. Controladores (Arrays)
-Para mantener la aplicación estructurada, puedes delegar la lógica a una clase controladora pensando un arreglo con la clase y el método a ejecutar.
+Para mantener la aplicación estructurada, puedes delegar la lógica a una clase controladora pasando un arreglo con la clase y el método a ejecutar.
 
 ``` php
 use NOMBRE_DE_TU_APP\Controllers\UsuarioController;
