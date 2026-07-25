@@ -14,7 +14,7 @@ class Router
      */
     private array $groupMiddlewares = [];
 
-    public function __construct(private string $prefix) 
+    public function __construct(private string $prefix = '/') 
     {
         $this->prefix = '/' . trim($prefix, '/');
     }

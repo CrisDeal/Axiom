@@ -229,7 +229,7 @@ class Axiom {
      */
     private function bootRouter(): void
     {
-        $this->router = $this->container->make(Router::class);
+        $this->router = $this->container->make(MainRouter::class);
 
         foreach ($this->pendingRoutes as $route) {
             $this->router

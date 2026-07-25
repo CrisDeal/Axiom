@@ -2,7 +2,7 @@
     "name": "axiom/framework",
     "description": "Axiom PHP framework designed for simplicity and performance",
     "type": "library",
-    "license": "MIT",
+    "license": "proprietary",
     "authors": [
         {
             "name": "Cristian Dealmonte"

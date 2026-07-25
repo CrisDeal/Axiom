@@ -33,9 +33,10 @@ class MainRouter
      * Diccionario de alias para restricciones de rutas.
      */
     private array $patterns = [
-        'int'   => '\d+',             // Solo números
+        'int'    => '\d+',             // Solo números
         'string' => '[a-zA-Z]+',       // Solo letras
-        'alnum' => '[a-zA-Z0-9]+',    // Letras y números
+        'alnum'  => '[a-zA-Z0-9]+',    // Letras y números
+        'path'   => '(/.*)?',          // Cualquier despues de /
     ];
 
     /**
@@ -431,9 +432,7 @@ class MainRouter
             ];
         }
 
-        return [
-            'status' => self::NOT_FOUND
-        ];
+        return ['status' => self::NOT_FOUND];
     }
 
     /**

@@ -8,7 +8,7 @@ use Axiom\DI\Container;
 use Axiom\Contracts\Providers\ServiceProviderInterface;
 use Axiom\Http\Router\Request;
 use Axiom\Http\Router\Response;
-use Axiom\Http\Router\Router;
+use Axiom\Http\Router\MainRouter;
 use Axiom\Exceptions\ErrorHandler;
 
 /**
@@ -64,8 +64,8 @@ class RoutingServiceProvider implements ServiceProviderInterface
 
         // Router — recibe todas sus dependencias del contenedor.
         $container->singleton(
-            Router::class, 
-            fn($c) => new Router(
+            MainRouter::class, 
+            fn($c) => new MainRouter(
                 $c->make(Request::class),
                 $c->make(Response::class),
                 $c,

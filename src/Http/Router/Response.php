@@ -171,13 +171,13 @@ class Response {
         // Extrae $data como variables locales disponibles en la vista.
         extract($data, EXTR_SKIP);
         
-        // Captura el output de la vista en $content.
+        // Captura el output de la vista en $contenido.
         // El try/finally garantiza que el buffer siempre se cierre,
         // incluso si la vista lanza una excepción.
         try {
             ob_start();
             include $viewPath;
-            $content = ob_get_clean();
+            $contenido = ob_get_clean();
         } finally {
             // Si ob_get_clean() no se ejecutó, limpia el buffer manualmente.
             if(ob_get_level() > 0) {
@@ -187,11 +187,11 @@ class Response {
 
         // Si no se especifica layout, emite la vista directamente.
         if($layout === null) {
-            echo $content;
+            echo $contenido;
             return;
         }
 
-        // Renderiza el layout - espera la variable $content definida arriba.
+        // Renderiza el layout - espera la variable $contenido definida arriba.
         $layoutPath = "{$this->viewsPath}/{$layout}.php";
         if(!file_exists($layoutPath)) {
             throw new HttpException("Layout no encontrado en '$layoutPath'", 500);
