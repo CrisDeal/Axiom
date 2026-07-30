@@ -4,47 +4,23 @@ namespace Axiom\Http\Router;
 use Axiom\Exceptions\HttpException;
 
 /**
- * Response
- *
- * Representa la respuesta HTTP que el servidor envía al cliente.
- * Gestiona headers, status codes, respuestas JSON y renderizado de vistas.
- *
- * Garantiza que la respuesta solo se envíe una vez mediante el flag $sent.
- * Cualquier intento de enviar una segunda respuesta lanza una excepción.
- *
- * Uso básico:
- *   $response->json(['success' => true]);
- *   $response->render('home/Index');
- *   $response->render('emails/Welcome', [], null);  // sin layout
- *   $response->redirect('/login');
- *   $response->status(204);
+ * HTTP Response
+ * 
+ * Se encarga de formatear y emitir la salida hacia el cliente.
+ * Implementa un mecanismo de bloqueo (guard) para asegurar que una 
+ * petición HTTP reciba una y solo una respuesta, previniendo estados corruptos.
  */
 class Response {
 
-    /**
-     * Indica si la respuesta ya fue enviada.
-     * Protege contra doble envío accidental.
-     */
     private bool $sent = false;
-    
-    /**
-     * Ruta base donde viven los archivos de vista (.php).
-     * Puede ser null si la app solo usa JSON (modo API puro).
-     */
     public ?string $viewsPath;
 
     /**
-     * Headers HTTP personalizados a incluir en la respuesta.
-     * Se envían justo antes de emitir el body.
-     *
-     * @var array<string, string>
+     * @var array<string, string> Headers HTTP listos para enviarse.
+     * Las claves se almacenan en minúsculas para evitar duplicidades accidentales.
      */
     private array $headers = [];
 
-    /**
-     * @param string|null $viewsPath Ruta absoluta al directorio de vistas.
-     *                               Opcional — puede ser null en apps API puras.
-     */
     public function __construct(?string $viewsPath = null) {
         $this->viewsPath = $viewsPath !== null
             ? rtrim($viewsPath, '/\\')
@@ -52,36 +28,26 @@ class Response {
     }
 
     /**
-     * Indica si la respuesta ya fue enviada.
+     * Permite al Router saber si el controlador actual finalizó su trabajo.
      */
     public function hasBeenSent() : bool {
         return $this->sent;
     }
 
     /**
-     * Agrega un header HTTP personalizado a la respuesta.
-     * Debe llamarse antes de json(), render() o status().
-     *
-     * Ejemplo:
-     *   $response->withHeader('Cache-Control', 'no-store');
-     *   $response->withHeader('X-Api-Version', '1.0');
-     *
-     * @param  string   $name   Nombre del header. Ejemplo: 'Cache-Control'
-     * @param  string   $value  Valor del header.
-     * @return static           Retorna la instancia para encadenamiento.
+     * Agrega un header HTTP personalizado.
+     * Normaliza la clave a minúsculas para evitar colisiones (ej. Content-Type vs content-type).
      */
     public function withHeader(string $name, string $value): static {
-        $this->headers[$name] = $value;
+        $this->headers[strtolower($name)] = $value;
         return $this;
     }
 
     /**
-     * Envía una respuesta de texto plano o HTML.
-     *
-     * @param string $content Texto o HTML a enviar.
-     * @param int $statusCode HTTP status code. Por defecto 200.
+     * Envía una respuesta de texto plano o HTML crudo.
      */
-    public function send(string $content, int $statusCode = 200): void {
+    public function send(string $content, int $statusCode = 200): void 
+    {
         $this->guardAgainstDoubleSend();
         $this->sent = true;
 
@@ -96,15 +62,11 @@ class Response {
     }
 
     /**
-     * Envía una respuesta con solo un status code y sin body.
-     * Útil para respuestas 204 No Content, 304 Not Modified, etc.
-     *
-     * Ejemplo:
-     *   $response->status(204); // recurso eliminado, sin contenido
-     *
-     * @param int $code HTTP status code.
+     * Termina la petición enviando solo un código de estado (sin body).
+     * Útil para respuestas 204 No Content o webhooks.
      */
-    public function status(int $code): void {
+    public function status(int $code): void 
+    {
         $this->guardAgainstDoubleSend();
         $this->sent = true;
 
@@ -113,16 +75,10 @@ class Response {
     }
 
     /**
-     * Redirige al cliente a otra URL.
-     *
-     * Ejemplo:
-     *   $response->redirect('/login');
-     *   $response->redirect('/dashboard', 301); // redirección permanente
-     *
-     * @param string $url  URL destino.
-     * @param int    $code Status code. Por defecto 302 (temporal).
+     * Ejecuta una redirección HTTP. El script debe detenerse tras esto.
      */
-    public function redirect(string $url, int $code = 302): void {
+    public function redirect(string $url, int $code = 302): void 
+    {
         $this->guardAgainstDoubleSend();
         $this->sent = true;
 
@@ -132,26 +88,11 @@ class Response {
     }
 
     /**
-     * Renderiza una vista PHP con datos opcionales.
-     *
-     * Por defecto envuelve la vista en MainLayout.php.
-     * Pasa null en $layout para renderizar sin layout — útil para
-     * vistas de error, emails, o respuestas parciales.
-     *
-     * Ejemplo:
-     *   $response->render('users/Profile', ['user' => $user]);
-     *   $response->render('emails/Welcome', ['name' => 'Ana'], null);
-     *   $response->render('dashboard/Home', [], 'layout/AdminLayout');
-     *
-     * @param string      $view   Ruta relativa a la vista desde viewsPath, sin .php
-     * @param array       $data   Variables disponibles dentro de la vista.
-     * @param string|null $layout Ruta relativa al layout desde viewsPath, sin .php
-     *                            Usa null para renderizar sin layout.
-     *
-     * @throws HttpException Si viewsPath no fue configurado.
-     * @throws HttpException Si la vista o el layout no existen.
+     * Motor de plantillas nativo basado en PHP.
+     * Utiliza Output Buffering para procesar el archivo antes de enviarlo.
      */
-    public function render(string $view, array $data = [], ?string $layout = null) : void{
+    public function render(string $view, array $data = [], ?string $layout = null) : void
+    {
         $this->guardAgainstDoubleSend();
 
         if($this->viewsPath === null) {
@@ -165,52 +106,41 @@ class Response {
             throw new HttpException("Vista '$view' no encontrada en '$viewPath'", 500);
         }
 
+        $this->withHeader('Content-Type', 'text/html; charset=UTF-8');
         $this->sendHeaders();
-        header('Content-Type: text/html; charset=UTF-8');
 
-        // Extrae $data como variables locales disponibles en la vista.
+        // Expone el array asociativo como variables individuales dentro del scope actual
         extract($data, EXTR_SKIP);
         
-        // Captura el output de la vista en $contenido.
-        // El try/finally garantiza que el buffer siempre se cierre,
-        // incluso si la vista lanza una excepción.
         try {
+            // Inicia la captura de toda la salida (echo, HTML crudo) en memoria
             ob_start();
             include $viewPath;
             $contenido = ob_get_clean();
         } finally {
-            // Si ob_get_clean() no se ejecutó, limpia el buffer manualmente.
+            // Safety Net: Si include lanza una excepción, limpiamos el buffer sucio 
+            // para que no se imprima HTML roto junto con la pantalla de error.
             if(ob_get_level() > 0) {
                 ob_end_clean();
             }
         }
 
-        // Si no se especifica layout, emite la vista directamente.
         if($layout === null) {
             echo $contenido;
             return;
         }
 
-        // Renderiza el layout - espera la variable $contenido definida arriba.
         $layoutPath = "{$this->viewsPath}/{$layout}.php";
         if(!file_exists($layoutPath)) {
             throw new HttpException("Layout no encontrado en '$layoutPath'", 500);
         }
 
+        // El archivo layout.php debe hacer un `echo $contenido;` en su interior.
         include $layoutPath;
     }
 
     /**
-     * Envía una respuesta JSON.
-     *
-     * Ejemplo:
-     *   $response->json(['success' => true, 'data' => $users]);
-     *   $response->json(['message' => 'No autorizado'], 401);
-     *
-     * @param array $data       Datos a serializar como JSON.
-     * @param int   $statusCode HTTP status code. Por defecto 200.
-     *
-     * @throws HttpException Si los datos no pueden serializarse a JSON.
+     * Convierte un array asociativo a JSON y lo emite.
      */
     public function json(array $data, int $statusCode = 200) : void {
         $this->guardAgainstDoubleSend();
@@ -221,6 +151,7 @@ class Response {
         http_response_code($statusCode);
 
         try {
+            // JSON_THROW_ON_ERROR evita retornos falsos (false) si hay datos binarios o malformados
             echo json_encode($data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
         } catch(\JsonException $e) {
             throw new HttpException('Failed to encode JSON response', 500);
@@ -228,8 +159,7 @@ class Response {
     }
 
     /**
-     * Envía todos los headers personalizados registrados con withHeader().
-     * Se llama internamente justo antes de emitir cualquier respuesta.
+     * Emite los headers acumulados a PHP.
      */
     private function sendHeaders(): void {
         foreach ($this->headers as $name => $value) {
@@ -238,10 +168,8 @@ class Response {
     }
 
     /**
-     * Lanza una excepción si la respuesta ya fue enviada.
-     * Se llama al inicio de cada método público que emite una respuesta.
-     *
-     * @throws HttpException
+     * Previene colisiones fatal errors advirtiendo al desarrollador 
+     * si intenta enviar más de una respuesta en el mismo ciclo.
      */
     private function guardAgainstDoubleSend(): void {
         if ($this->sent) {

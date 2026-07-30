@@ -13,39 +13,35 @@ use Axiom\Providers\RoutingServiceProvider;
 use Axiom\Contracts\Providers\ServiceProviderInterface;
 
 /**
- * Application Axiom
+ * Axiom Application (Kernel)
  * 
- * Punto de entrada del framework Axiom.
- * Orquesta el contenedor DI, los providers y el ciclo de vida de la peticion HTTP.
- * 
+ * El núcleo del framework. Actúa como fachada (Facade) para registrar rutas, 
+ * configurar el contenedor de Inyección de Dependencias (DI) y orquestar 
+ * el ciclo de vida (Bootstrapping) de la petición HTTP.
  */
 class Axiom {
 
     // ====================================================================================
-    // CONFIGURACION
+    // CORE & CONFIGURACIÓN
     // ====================================================================================
 
-    /** Contenedor DI compartido por toda la applicacion. */
     public readonly Container $container;
-
     private ?string $configPath = null;
 
-    /** Providers registrados por el usuario. */
+    /** @var ServiceProviderInterface[] Providers registrados por el usuario. */
     private array $providers = [];
 
-    /** Router interno - se resuelve del contenedor en boot() */
+    /** @var MainRouter Instancia resuelta durante la fase de boot. */
     public MainRouter $router;
 
     /** 
-     * Rutas pendientes de registrar.
-     * Se acumulan antes de boot() y se registran cuando el router este listo.
-     * Estructura: [['method' => 'GET', 'url' => '/ping', 'action' => callable, 'middlewares' => []]]
-     * 
-     * @var array<int, array>
+     * @var array Rutas en memoria temporal.
+     * Implementa 'Deferred Execution': Las rutas se guardan aquí hasta que el 
+     * Router real esté instanciado y configurado con sus dependencias.
      */
     private array $pendingRoutes = [];
 
-    /** Referencia a la ultima ruta pendiente para encadenamiento de middlewares. */
+    /** Índice de la última ruta agregada para permitir chaining de middlewares. */
     private int $lastPendingIndex = -1;
 
 
@@ -65,11 +61,7 @@ class Axiom {
     }
 
     /**
-     * Agrega un provider a la applicacion.
-     * Debe llamarse antes de run().
-     * 
-     * Ejemplo: 
-     *  $app->addProvider(new FetchServiceProvider());
+     * Registra un Service Provider personalizado.
      */
     public function addProvider(ServiceProviderInterface $provider): static {
         $this->providers[] = $provider;
@@ -78,48 +70,27 @@ class Axiom {
 
 
     // ====================================================================================
-    // ROUTER PRINCIPAL
+    // PROXY DE ENRUTAMIENTO (DEFERRED)
     // ====================================================================================
 
-    /** Registra una ruta GET. */
     public function get(string $url, callable|array $action): static {
         return $this->addPendingRoute('GET', $url, $action);
     }
 
-    /** Registra una ruta POST. */
     public function post(string $url, callable|array $action): static {
         return $this->addPendingRoute('POST', $url, $action);
     }
 
-    /** Registra una ruta PUT. */
     public function put(string $url, callable|array $action): static {
         return $this->addPendingRoute('PUT', $url, $action);
     }
 
-    /** Registra una ruta PATCH. */
     public function patch(string $url, callable|array $action): static {
         return $this->addPendingRoute('PATCH', $url, $action);
     }
 
-    /** Registra una ruta DELETE. */
     public function delete(string $url, callable|array $action): static {
         return $this->addPendingRoute('DELETE', $url, $action);
-    }
-
-    /**
-     * Asigna middlewares a la ultima ruta registrada.
-     * Funciona igual antes y despues de boot().
-     * 
-     * Ejemplo: 
-     *  $app->get('/admin', [AdminController::class, 'index'])
-     *      ->middleware(AuthMiddleware::class);
-     */
-    public function middleware(string ...$middlewares): static {
-        $this->pendingRoutes[$this->lastPendingIndex]['middlewares'] = array_merge(
-            $this->pendingRoutes[$this->lastPendingIndex]['middlewares'],
-            $middlewares
-        );
-        return $this;
     }
 
     /**
@@ -136,32 +107,49 @@ class Axiom {
         $this->lastPendingIndex = array_key_last($this->pendingRoutes);
         return $this;
     }
+    
+    /**
+     * Asigna middlewares a la última ruta registrada de forma encadenada.
+     */
+    public function middleware(string ...$middlewares): static {
+        if ($this->lastPendingIndex === -1) {
+            throw new \LogicException('Application: No hay una ruta previa para asignar el middleware.');
+        }
+
+        $this->pendingRoutes[$this->lastPendingIndex]['middlewares'] = array_merge(
+            $this->pendingRoutes[$this->lastPendingIndex]['middlewares'],
+            $middlewares
+        );
+        return $this;
+    }
 
     /**
-     * Monta un grupo de rutas en la application.
-     * Las rutas del grupo se registran con su prefijo aplicado.
-     * 
-     * Ejemplo: 
-     *  $app->mount(require 'routes/users.php');
-     *  $app->mount(require 'routes/products.php');
-     * 
-     * @param Router $group Grupo de rutas a montar.
+     * Extrae las rutas de un RouteGroup (Router) y las pasa a la cola de pendientes.
      */
-    public function mount(Router $group): void {
+    public function mount(Router $group): void 
+    {
         foreach ($group->getRoutes() as $route) {
             $this->pendingRoutes[] = $route;
             $this->lastPendingIndex = array_key_last($this->pendingRoutes);
         }
+
+        // BUGFIX: Reseteamos el índice para evitar que un ->middleware() encadenado 
+        // a la app afecte accidentalmente solo a la última ruta de este grupo.
+        $this->lastPendingIndex = -1;
     }
 
+
+    // ====================================================================================
+    // CICLO DE VIDA (BOOTSTRAPPING)
+    // ====================================================================================
 
     /** 
      * Inicializar la applicacion y despacha la peticion HTTP.
      * Debe llamarse al final, despues de registrar rutas y providers.
      */
-    public function run(): void {
+    public function run(): void 
+    {
         $this->boot();
-        // \Axiom\Support\Debug::dd($this->container);
         $this->router->verifyRoutes();
     }
 
@@ -193,9 +181,8 @@ class Axiom {
     }
 
     /**
-     * Inicializa el RoutingServiceProvider y registra el ErrorHandler en PHP.
-     * Se ejecuta antes que cualquier otro provider para capturar
-     * errores de configuración y arranque.
+     * Se enciende primero para que cualquier Excepción lanzada por los siguientes 
+     * Providers sea capturada y renderizada amigablemente por Axiom, no por PHP nativo.
      */
     private function bootErrorHandler(): void
     {
@@ -205,7 +192,9 @@ class Axiom {
     }
 
     /**
-     * Ejecuta el ciclo register → boot de todos los providers restantes.
+     * Ejecuta el ciclo de 2 Fases (Register -> Boot) de los 
+     * providers de axiom garantizando que todas las dependencias 
+     * estén listas antes de usarse.
      */
     private function bootProviders(): void
     {
@@ -215,17 +204,19 @@ class Axiom {
             ...$this->providers
         ];
 
+        // Fase 1: Enseñar al contenedor cómo construir todo
         foreach ($providers as $provider) {
             $provider->register($this->container);
         }
 
+        // Fase 2: Ejecutar lógica de inicio seguro
         foreach ($providers as $provider) {
             $provider->boot($this->container);
         }
     }
 
     /**
-     * Resuelve el Router del contenedor y registra todas las rutas acumuladas.
+     * Resuelve el Router del contenedor y vacía la cola temporal de rutas (Deferred Routing).
      */
     private function bootRouter(): void
     {

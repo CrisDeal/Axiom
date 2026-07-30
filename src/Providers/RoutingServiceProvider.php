@@ -52,8 +52,8 @@ class RoutingServiceProvider implements ServiceProviderInterface
             }
         );
     
-        // ErrorHandler — singleton que comparte las mismas instancias
-        // de Request y Response que usa el Router.
+        // ErrorHandler actúa como un escudo final. Necesita el Request actual 
+        // para loguear qué URL falló, y el Response para emitir vistas de error (ej: 404.php).
         $container->singleton(
             ErrorHandler::class, 
             fn($c) => new ErrorHandler(
@@ -62,7 +62,10 @@ class RoutingServiceProvider implements ServiceProviderInterface
             )
         );
 
-        // Router — recibe todas sus dependencias del contenedor.
+        // Core HTTP Dispatcher.
+        // Aunque el Contenedor podría resolver esto vía Reflection (Auto-wiring),
+        // declarar explícitamente el Closure es micro-optimización de rendimiento
+        // crucial para el router, ya que se ejecuta en el 100% de las peticiones.
         $container->singleton(
             MainRouter::class, 
             fn($c) => new MainRouter(
@@ -75,14 +78,12 @@ class RoutingServiceProvider implements ServiceProviderInterface
     }
 
     /**
-     * Registra el ErrorHandler en PHP una vez que todos los
-     * servicios están registrados en el contenedor.
-     *
-     * boot() se ejecuta después de register() — en este punto
-     * el ErrorHandler ya puede resolverse correctamente.
+     * Se ejecuta cuando TODOS los Service Providers ya pasaron por register().
+     * Aquí es seguro interactuar con los servicios instanciados y aplicar side-effects.
      */
     public function boot(Container $container): void {
-        // Boot logic for the routing provider
+        // Tomamos el control del sistema de errores nativo de PHP (set_error_handler, set_exception_handler)
+        // y lo delegamos al ErrorHandler de Axiom.
         $container->make(ErrorHandler::class)->register();
     }
 }

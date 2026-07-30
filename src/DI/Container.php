@@ -6,61 +6,46 @@ namespace Axiom\DI;
 use ReflectionClass;
 use Exception;
 use Closure;
+use ReflectionNamedType;
 
 /**
- * Container
+ * Contenedor de Inyección de Dependencias (DI)
  *
- * Contenedor de Inyección de Dependencias (DI) de Axiom.
- * Resuelve dependencias automáticamente usando Reflection de PHP,
- * y permite registrar bindings manuales para interfaces, primitivos
- * y servicios que requieren configuración especial.
+ * El "corazón" de la aplicación. Se encarga de instanciar clases automáticamente
+ * leyendo sus constructores (Auto-wiring) y resolviendo sus dependencias en cascada.
  *
  * Modos de registro:
- *   bind()      — registra una factory, se crea una instancia nueva cada vez
- *   singleton() — registra una factory, reutiliza la misma instancia
- *   instance()  — registra un objeto ya construido directamente
+ *   - bind():      Crea una instancia completamente nueva cada vez que se solicita.
+ *   - singleton(): Ejecuta la factory una vez y devuelve esa misma instancia siempre.
+ *   - instance():  Registra un objeto que ya fue instanciado fuera del contenedor.
  *
- * Uso básico:
+ * Ejemplo de uso:
  *   $container->singleton(Database::class, fn($c) => new Database($config));
  *   $container->bind(MailerInterface::class, SmtpMailer::class);
  *   $controller = $container->make(UserController::class);
  */
 class Container 
 {
-
     /**
-     * Factories y valores registrados manualmente.
-     * Estructura: ['ClassName' => Closure|object|string]
-     *
-     * @var array<string, mixed>
+     * @var array<string, Closure|object|string> Referencias manuales registradas por el usuario.
      */
     private array $bindings = [];
 
     /**
-     * Instancias singleton ya resueltas.
-     * Una vez resuelto, make() retorna siempre la misma instancia.
-     *
-     * @var array<string, object>
+     * @var array<string, object|null> Caché de instancias únicas. 
+     * Se inicializan en `null` para reservar el espacio cuando se llama a singleton().
      */
     private array $instances = [];
 
     /**
-     * Clases en proceso de resolución.
-     * Usado para detectar dependencias circulares.
-     *
-     * @var array<string, bool>
+     * @var array<string, true> Mapa temporal para rastrear qué clases se están 
+     * construyendo actualmente y evitar bucles infinitos (Dependencias Circulares).
      */
     private array $resolving = [];
 
     /**
-     * Registra una factory para crear una instancia nueva en cada make().
-     *
-     * Ejemplo:
-     *   $container->bind(LoggerInterface::class, FileLogger::class);
-     *   $container->bind(Mailer::class, fn($c) => new Mailer($c->make(Config::class)));
-     *
-     * @param string                $abstract Interfaz o clase a registrar.
-     * @param string|object $concrete Clase concreta, objeto, o factory closure.
+     * Registra una dependencia que se reconstruirá en cada llamada a make().
+     * Útil para objetos que mantienen un estado temporal y no deben compartirse.
      */
     public function bind(string $abstract, string|object $concrete): void 
     {
@@ -68,23 +53,15 @@ class Container
     }
 
     /**
-     * Registra una factory que se resuelve una sola vez.
-     * Todas las llamadas posteriores a make() retornan la misma instancia.
-     *
-     * Ideal para: conexiones a base de datos, loggers, configuración.
-     *
-     * Ejemplo:
-     *   $container->singleton(Database::class, fn($c) => new Database($config));
-     *   $container->singleton(Request::class, fn() => new Request());
-     *
-     * @param string          $abstract Interfaz o clase a registrar.
-     * @param string|Closure $concrete Clase concreta o factory closure.
+     * Registra una dependencia compartida (Patrón Singleton).
+     * Ideal para conexiones a base de datos, configuraciones o loggers.
      */
     public function singleton(string $abstract, string|Closure $concrete): void 
     {
-        // Marcamos el binding para que make() sepa que debe cachear la instancia.
         $this->bindings[$abstract] = $concrete;
-        $this->instances[$abstract] = null; // reserva el slot
+        // Reservamos el slot. Esto le indica a make() que debe guardar 
+        // el resultado aquí una vez que lo construya.
+        $this->instances[$abstract] = null;
     }
 
     /**
@@ -93,13 +70,6 @@ class Container
      *
      * Útil para registrar objetos creados en el bootstrap
      * (Request, Response, ErrorHandler) en el contenedor.
-     *
-     * Ejemplo:
-     *   $container->instance(Request::class, $request);
-     *   $container->instance(Response::class, $response);
-     *
-     * @param string $abstract  Interfaz o clase a registrar.
-     * @param object $instance  Instancia ya construida.
      */
     public function instance(string $abstract, object $instance): void 
     {
@@ -114,10 +84,7 @@ class Container
      *   2. Binding manual registrado -> ejecuta la factory o usa la clase concreta
      *   3. Auto-resolución con Reflection -> inspecciona el constructor y resuelve dependencias
      *
-     * @param  string $abstract Clase o interfaz a resolver.
-     * @return object
-     *
-     * @throws Exception Si la clase no es instanciable, hay dependencias circulares,
+     * @throws Exception Si la clase no es instanciable o hay dependencias circulares,
      *                   o un parámetro primitivo no puede resolverse.
      */
     public function make(string $abstract): object 
@@ -127,7 +94,7 @@ class Container
             return $this->instances[$abstract];
         }
 
-        // Detección de dependencias circulares.
+        // Prevención de colapso por dependencia circular (A requiere B, B requiere A)
         if (isset($this->resolving[$abstract])) {
             throw new Exception(
                 "Dependencia circular detectada al resolver '$abstract'."
@@ -221,7 +188,7 @@ class Container
         foreach ($constructor->getParameters() as $param) {
             $type = $param->getType();
 
-            if ($type && !$type->isBuiltin()) {
+            if ($type instanceof ReflectionNamedType && !$type->isBuiltin()) {
                 // Dependencia de tipo clase/interfaz — se resuelve recursivamente.
                 $dependencies[] = $this->make($type->getName());
 

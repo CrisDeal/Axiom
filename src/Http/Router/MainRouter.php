@@ -9,57 +9,51 @@ use Axiom\Exceptions\MethodNotAllowedException;
 use Axiom\Exceptions\NotFoundException;
 
 /**
- * MainRouter
+ * MainRouter (Despachador Frontal)
  *
- * Registra rutas HTTP y despacha las peticiones entrantes al
- * controlador o callable correspondiente, pasándolas primero
- * por el pipeline de middlewares configurado.
- *
- * Uso básico:
- *   $router->get('/', function($req, $res) {...});
- *   $router->get('/users', [UserController::class, 'index']);
- *   $router->post('/users', [UserController::class, 'store'])
- *      ->middleware(AuthMiddleware::class);
- * 
- *   $router->verifyRoutes();
+ * Es el motor principal del ciclo de vida de la petición HTTP en Axiom.
+ * A diferencia del Router de grupos (que solo colecciona), esta clase:
+ * 1. Mantiene el registro final (mapa) de todas las rutas de la aplicación.
+ * 2. Evalúa la petición entrante (matcheo estático y dinámico).
+ * 3. Ensambla y ejecuta el pipeline de middlewares (patrón cebolla).
+ * 4. Resuelve e invoca el controlador final usando Inyección de Dependencias.
  */
 class MainRouter 
 {
+    // Estados internos para la evaluación de la ruta.
     private const FOUND = 'FOUND';
     private const NOT_FOUND = 'NOT_FOUND';
     private const METHOD_NOT_ALLOWED = 'METHOD_NOT_ALLOWED';
 
     /**
-     * Diccionario de alias para restricciones de rutas.
+     * @var array<string, string> Diccionario de alias para restricciones regex en rutas dinámicas.
+     * Permite escribir {id:int} en lugar de {id:\d+}.
      */
     private array $patterns = [
         'int'    => '\d+',             // Solo números
         'string' => '[a-zA-Z]+',       // Solo letras
-        'alnum'  => '[a-zA-Z0-9]+',    // Letras y números
-        'path'   => '(/.*)?',          // Cualquier despues de /
+        'alnum'  => '[a-zA-Z0-9]+',    // Letras y números (alfanumérico)
+        'path'   => '(/.*)?',          // Cualquier ruta anidada después del slash
     ];
 
     /**
-     * Rutas registradas indexadas por método HTTP y URL.
-     * Estructura: 
-     *  [
-     *      'GET' => [
-     *          '/url' => [
-     *              'action' => [UrlController::class, 'index'], 
-     *              'middlewares' => [...]
-     *          ]
-     *      ]
-     *  ]
-     *
-     * @var array<string, array<string, array>>
+     * @var array Mapa multidimensional de rutas registradas.
+     * Estructura optimizada para búsqueda rápida por método HTTP:
+     * [
+     *     'GET' => [
+     *         '/users' => [
+     *             'action'      => [UserController::class, 'index'],
+     *             'middlewares' => [AuthMiddleware::class],
+     *             'is_dynamic'  => false,
+     *             'pattern'     => null
+     *         ]
+     *     ]
+     * ]
      */
     private array $routes = [];
 
     /**
-     * Referencia a la última ruta registrada.
-     * Permite encadenar ->middleware() después de get(), post(), etc.
-     *
-     * @var array{method: string, url: string}
+     * @var array Puntero de estado para encadenamiento fluido (->middleware()).
      */
     private array $lastRoute = [];
 
@@ -76,38 +70,43 @@ class MainRouter
         private ErrorHandler $errorHandler
     ) {}
 
+    public function get(string $url, callable|array $fn) : self {
+        return $this->addRoute('GET', $url, $fn);
+    }
+
+    public function post(string $url, callable|array $fn) : self {
+        return $this->addRoute('POST', $url, $fn);
+    }
+
+    public function put(string $url, callable|array $fn) : self {
+        return $this->addRoute('PUT', $url, $fn);
+    }
+
+    public function patch(string $url, callable|array $fn) : self {
+        return $this->addRoute('PATCH', $url, $fn);
+    }
+
+    public function delete(string $url, callable|array $fn) : self {
+        return $this->addRoute('DELETE', $url, $fn);
+    }
+
     /**
-     * Registra una ruta en el mapa interno del Router.
-     *
-     * @param string         $method Método HTTP en mayúsculas. Ejemplo: 'GET'
-     * @param string         $url    Ruta. Soporta parámetros dinámicos: '/users/{id}'
-     * @param callable|array $fn     Callable o [ControllerClass::class, 'method']
-     * @return self          $this   Permite encadenamiento con ->middleware()
+     * Registra una ruta base en el motor.
+     * 
+     * Optimización clave: Si la ruta tiene parámetros dinámicos ({id}),
+     * se pre-compila su expresión regular aquí (durante el bootstrap) 
+     * y no durante la iteración de búsqueda (matchRoute), ahorrando CPU.
      */
-    // public function addRoute(string $method, string $url, callable|array $fn) : self 
-    // {
-    //     // Convierte "/users/" en "/users", pero respeta la barra si es la raíz "/"
-    //     $url = rtrim($url, '/') ?: '/';
-
-    //     $this->routes[$method][$url] = [
-    //         'action'      => $fn,
-    //         'middlewares' => []
-    //     ];
-
-    //     $this->lastRoute = ['method' => $method, 'url' => $url];
-
-    //     return $this;
-    // }
     public function addRoute(string $method, string $url, callable|array $fn) : self 
     {
-        // 1. Normalización del Trailing Slash (tu código actual)
+        // Normalización: Elimina slashes finales para evitar que /users y /users/ sean vistos como distintos.
         $url = rtrim($url, '/') ?: '/';
         
-        // 2. Optimización: Pre-compilar Regex
         $isDynamic = str_contains($url, '{');
         $pattern = null;
 
         if ($isDynamic) {
+            // Convierte {param:constraint} en grupos regex nombrados (?P<param>constraint)
             $regex = preg_replace_callback(
                 '/\{([a-zA-Z0-9_]+)(?::([^}]+))?\}/',
                 function ($matches) {
@@ -115,8 +114,9 @@ class MainRouter
                     $constraint = $matches[2] ?? null;
                     
                     if (!$constraint) {
-                        $rule = '[^/]+';
+                        $rule = '[^/]+'; // Por defecto: cualquier cosa hasta el próximo slash
                     } else {
+                        // Resuelve el alias ('int') o usa la regex manual provista
                         $rule = $this->patterns[$constraint] ?? $constraint;
                     }
 
@@ -127,12 +127,11 @@ class MainRouter
             $pattern = '#^' . $regex . '$#';
         }
 
-        // 3. Guardar en el mapa de rutas
         $this->routes[$method][$url] = [
             'action'      => $fn,
             'middlewares' => [],
             'is_dynamic'  => $isDynamic,
-            'pattern'     => $pattern // Guardamos la regex compilada
+            'pattern'     => $pattern // Regex pre-compilada, lista para preg_match
         ];
 
         $this->lastRoute = ['method' => $method, 'url' => $url];
@@ -140,46 +139,15 @@ class MainRouter
         return $this;
     }
 
-    /** Registra una ruta GET. */
-    public function get(string $url, callable|array $fn) : self {
-        return $this->addRoute('GET', $url, $fn);
-    }
-
-    /** Registra una ruta POST. */
-    public function post(string $url, callable|array $fn) : self {
-        return $this->addRoute('POST', $url, $fn);
-    }
-
-    /** Registra una ruta PUT. */
-    public function put(string $url, callable|array $fn) : self {
-        return $this->addRoute('PUT', $url, $fn);
-    }
-
-    /** Registra una ruta PATCH. */
-    public function patch(string $url, callable|array $fn) : self {
-        return $this->addRoute('PATCH', $url, $fn);
-    }
-
-    /** Registra una ruta DELETE. */
-    public function delete(string $url, callable|array $fn) : self {
-        return $this->addRoute('DELETE', $url, $fn);
-    }
-
     /**
-     * Asigna uno o más middlewares a la última ruta registrada.
-     * Debe llamarse inmediatamente después de get(), post(), etc.
-     *
-     * Ejemplo:
-     *   $router->get('/admin', [AdminController::class, 'index'])
-     *          ->middleware(AuthMiddleware::class, RateLimitMiddleware::class);
-     *
-     * @param  string ...$middlewares Clases de middleware a aplicar en orden.
-     * @throws \LogicException Si se llama sin haber registrado una ruta antes.
+     * Aplica middlewares a la ÚLTIMA ruta que pasó por addRoute().
+     * 
+     * @throws \LogicException Si se llama fuera de contexto.
      */
     public function middleware(string ...$middlewares) : self 
     {
         if(empty($this->lastRoute)) {
-            throw new \LogicException('No se ha definido ninguna ruta aún para asignar middleware.');
+            throw new \LogicException('Router: No se ha definido ninguna ruta aún para asignar middleware.');
         }
 
         $method = $this->lastRoute['method'];
@@ -193,31 +161,10 @@ class MainRouter
     }
 
     /**
-     * Punto de entrada principal del ciclo de vida de la petición.
-     * Debe llamarse al final del bootstrap, después de registrar todas las rutas.
-     *
-     * Hace match de la petición entrante contra las rutas registradas,
-     * ejecuta el pipeline de middlewares y despacha al controlador.
-     * Cualquier excepción no capturada es delegada al ErrorHandler.
+     * Punto de entrada principal (Trigger).
+     * Arranca la validación, despacha la petición y asegura que el ciclo
+     * se cierre correctamente (Response enviada).
      */
-    // public function verifyRoutes(): void 
-    // {
-    //     try {
-    //         $routeData = $this->matchRoute($this->request);
-
-    //         if(!$routeData) {
-    //             throw new NotFoundException("La ruta '{$this->request->url}' no existe.");
-    //         }
-
-    //         $this->dispatch($routeData);
-
-    //         if(!$this->response->hasBeenSent()) {
-    //             throw new \LogicException('No se envió ninguna respuesta para esta ruta.');
-    //         }
-    //     } catch(\Throwable $e) {
-    //         $this->handleException($e);
-    //     }
-    // }
     public function verifyRoutes(): void
     {
         try {
@@ -230,20 +177,16 @@ class MainRouter
                     break;
 
                 case self::METHOD_NOT_ALLOWED:
-                    throw new MethodNotAllowedException(
-                        $result['allowed']
-                    );
+                    // Se encontró la URL, pero el cliente usó un verbo incorrecto (ej: POST en vez de GET)
+                    throw new MethodNotAllowedException($result['allowed']);
 
                 case self::NOT_FOUND:
-                    throw new NotFoundException(
-                        "La ruta '{$this->request->url}' no existe."
-                    );
+                    throw new NotFoundException("La ruta '{$this->request->url}' no existe.");
             }
 
+            // Guard rails: Asegura que el controlador final realmente haya emitido una respuesta
             if(!$this->response->hasBeenSent()) {
-                throw new \LogicException(
-                    'No se envió ninguna respuesta para esta ruta.'
-                );
+                throw new \LogicException('Router: No se envió ninguna respuesta para esta ruta.');
             }
 
         } catch(\Throwable $e) {
@@ -252,138 +195,20 @@ class MainRouter
     }
 
     /**
-     * Busca la ruta que coincide con el método y URL de la petición.
-     *
-     * Primero intenta match estático (más rápido).
-     * Si no encuentra, itera sobre las rutas dinámicas usando regex.
-     * Los parámetros dinámicos encontrados se populan en $request->params.
-     *
-     * Ejemplo de ruta dinámica: '/users/{id}' matchea '/users/42'
-     * y popula $request->params['id'] = '42'.
-     *
-     * @return array|null Datos de la ruta encontrada, o null si no hay match.
+     * Motor de búsqueda de rutas híbrido.
+     * 
+     * Prioriza la velocidad: primero busca colisiones estáticas directas O(1).
+     * Solo si falla, itera sobre rutas dinámicas O(N) ejecutando regex.
+     * 
+     * @return array Array estructurado con el estado (status) y los datos de la ruta o métodos permitidos.
      */
-    // private function matchRoute(Request $req): ?array 
-    // {
-    //     $routes = $this->routes[$req->method] ?? [];
-
-    //     // Match estático — O(1), se evalúa primero por rendimiento.
-    //     if(isset($routes[$req->url])) {
-    //         return $routes[$req->url];
-    //     }
-
-    //     // Match dinámico — convierte {param} en grupo regex nombrado.
-    //     foreach($routes as $route => $data) {
-    //         $pattern = preg_replace('/\{([a-zA-Z0-9_]+)\}/', '(?P<\1>[^/]+)', $route);
-    //         $pattern = '#^' . $pattern . '$#';
-
-    //         if(preg_match($pattern, $req->url, $matches)) {
-    //             foreach($matches as $key => $value) {
-    //                 if(is_string($key)) {
-    //                     $req->params[$key] = $value;
-    //                 }
-    //             }
-    //             return $data;
-    //         }
-    //     }
-
-    //     return null;
-    // }
-
-    // private function matchRoute(Request $req): array
-    // {
-    //     $allowedMethods = [];
-
-    //     // Convierte "/users/" en "/users", pero respeta la barra si es la raíz "/"
-    //     $url = rtrim($req->url, '/') ?: '/';
-
-    //     foreach($this->routes as $method => $routes) {
-    //         // Match estático
-    //         if(isset($routes[$url])) {
-    //             if($method === $req->method) {
-    //                 return [
-    //                     'status' => self::FOUND,
-    //                     'route'  => $routes[$url]
-    //                 ];
-    //             }
-
-    //             $allowedMethods[] = $method;
-    //         }
-
-    //         // Match dinámico
-    //         foreach($routes as $route => $data) {
-
-    //             // $pattern = preg_replace(
-    //             //     '/\{([a-zA-Z0-9_]+)\}/',
-    //             //     '(?P<\1>[^/]+)',
-    //             //     $route
-    //             // );
-                
-    //             // Convertimos {param} o {param:alias} en un grupo regex nombrado
-    //             $pattern = preg_replace_callback(
-    //                 '/\{([a-zA-Z0-9_]+)(?::([^}]+))?\}/',
-    //                 function ($matches) {
-    //                     $name = $matches[1]; // Nombre del parámetro (ej: 'id')
-    //                     $constraint = $matches[2] ?? null; // La restricción (ej: 'int' o '\d+')
-
-    //                     if (!$constraint) {
-    //                         $regex = '[^/]+'; // Comportamiento por defecto (sin restricciones)
-    //                     } else {
-    //                         // Si es un alias conocido ('int'), lo usa. 
-    //                         // Si no, asume que el usuario escribió su propia regex pura.
-    //                         $regex = $this->patterns[$constraint] ?? $constraint;
-    //                     }
-
-    //                     return "(?P<$name>$regex)";
-    //                 },
-    //                 $route
-    //             );
-
-    //             $pattern = '#^' . $pattern . '$#';
-
-    //             if(!preg_match($pattern, $url, $matches)) {
-    //                 continue;
-    //             }
-
-    //             if($method !== $req->method) {
-    //                 $allowedMethods[] = $method;
-    //                 continue;
-    //             }
-
-    //             foreach($matches as $key => $value) {
-    //                 if(is_string($key)) {
-    //                     $req->params[$key] = $value;
-    //                 }
-    //             }
-
-    //             return [
-    //                 'status' => self::FOUND,
-    //                 'route'  => $data
-    //             ];
-    //         }
-    //     }
-
-    //     if(!empty($allowedMethods)) {
-    //         return [
-    //             'status'  => self::METHOD_NOT_ALLOWED,
-    //             'allowed' => array_unique($allowedMethods)
-    //         ];
-    //     }
-
-    //     return [
-    //         'status' => self::NOT_FOUND
-    //     ];
-    // }
     private function matchRoute(Request $req): array
     {
         $allowedMethods = [];
-        
-        // 1. Normalización del Trailing Slash (tu código actual)
         $url = rtrim($req->url, '/') ?: '/';
 
         foreach($this->routes as $method => $routes) {
-            
-            // Match estático
+            // Match Estático (Súper rápido)
             if(isset($routes[$url])) {
                 if($method === $req->method) {
                     return [
@@ -391,18 +216,14 @@ class MainRouter
                         'route'  => $routes[$url]
                     ];
                 }
+                // Si la URL existe pero el método no coincide, registramos qué método sí era válido
                 $allowedMethods[] = $method;
             }
 
-            // Match dinámico optimizado
+            // Match Dinámico (Regex)
             foreach($routes as $route => $data) {
-                
-                // Si no es dinámica, la ignoramos (ya falló en el match estático)
-                if (!$data['is_dynamic']) {
-                    continue;
-                }
+                if (!$data['is_dynamic']) continue;
 
-                // Usamos el 'pattern' pre-compilado
                 if(!preg_match($data['pattern'], $url, $matches)) {
                     continue;
                 }
@@ -412,6 +233,7 @@ class MainRouter
                     continue;
                 }
 
+                // Inyección de parámetros extraídos de la URL al Request
                 foreach($matches as $key => $value) {
                     if(is_string($key)) {
                         $req->params[$key] = $value;
@@ -425,6 +247,7 @@ class MainRouter
             }
         }
 
+        // Si recolectamos métodos permitidos, lanzamos 405 en lugar de 404
         if(!empty($allowedMethods)) {
             return [
                 'status'  => self::METHOD_NOT_ALLOWED,
@@ -436,46 +259,40 @@ class MainRouter
     }
 
     /**
-     * Ejecuta el pipeline de middlewares y despacha al controlador.
-     *
-     * El pipeline envuelve el controlador en capas de middleware —
-     * cada middleware puede actuar antes y después del siguiente.
-     * El controlador es siempre el núcleo (última capa).
-     *
-     * @param array $routeData Datos de la ruta: action y middlewares.
+     * Prepara e inicia la ejecución de la ruta seleccionada.
+     * Encapsula el controlador final dentro del pipeline de middlewares.
      */
     private function dispatch(array $routeData): void 
     {
         $action      = $routeData['action'];
         $middlewares = $routeData['middlewares'];
 
-        // El controlador es el núcleo del pipeline.
+        // Closure del núcleo (El destino final de la petición)
         $core = function($req, $res) use ($action) {
+            // Resolución via DI Container si es un array [Controlador, 'método']
             if(is_array($action)) {
                 [$controllerClass, $method] = $action;
                 $controller = $this->container->make($controllerClass);
                 return $controller->$method($req, $res);
             }
 
+            // Ejecución directa si es una función anónima (Closure)
             return $action($req, $res);
         };
 
+        // Ensambla y ejecuta el pipeline de middlewares alrededor del núcleo
         $pipeline = $this->buildMiddlewarePipeline($middlewares, $core);
         $pipeline($this->request, $this->response);
     }
 
     /**
-     * Construye el pipeline de middlewares usando reducción funcional.
-     *
-     * Los middlewares se aplican en el orden en que fueron registrados —
-     * array_reverse garantiza que el primero registrado sea el primero en ejecutarse.
-     *
-     * Cada middleware recibe ($req, $res, $next) donde $next ejecuta
-     * el siguiente middleware o el controlador si es la última capa.
-     *
-     * @param  array    $middlewares Clases de middleware a encadenar.
-     * @param  callable $core        Controlador final del pipeline.
-     * @return callable              Pipeline completo listo para ejecutar.
+     * Ensamblador funcional de Middlewares (Patrón Onion / Cebolla).
+     * 
+     * Convierte un arreglo lineal de clases middleware en una cadena de funciones anidadas.
+     * array_reverse asegura que el primer middleware registrado sea la capa más externa,
+     * envolviendo a los siguientes hasta llegar a $core.
+     * 
+     * @return callable Función que arranca toda la cadena.
      */
     private function buildMiddlewarePipeline(array $middlewares, callable $core): callable 
     {
@@ -483,7 +300,9 @@ class MainRouter
             array_reverse($middlewares),
             function($next, $middlewareClass) {
                 return function($req, $res) use ($next, $middlewareClass) {
+                    // Lazy Loading: El middleware se instancia justo en el momento de ejecutarse
                     $middleware = $this->container->make($middlewareClass);
+
                     // return $middleware->handle($req, $res, fn() => $next($req, $res));
                     // return $middleware->handle($req, $res, fn($req, $res) => $next($req, $res));
                     return $middleware->handle($req, $res, function() use ($next, $req, $res) {
@@ -496,16 +315,14 @@ class MainRouter
     }
 
     /**
-     * Monta un grupo de rutas en el Router principal.
+     * Integra un RouteGroup (Router secundario) dentro de este MainRouter.
+     * Transfiere todas las rutas compiladas y sus middlewares globales/específicos.
      */
     public function mount(Router $group): self
     {
         foreach ($group->getRoutes() as $route) {
-            // 1. addRoute del Router principal se encargará de compilar 
-            //    las regex (constraints) y normalizar el trailing slash.
             $this->addRoute($route['method'], $route['url'], $route['action']);
             
-            // 2. Aplicamos todos los middlewares que el grupo fusionó
             if (!empty($route['middlewares'])) {
                 $this->middleware(...$route['middlewares']);
             }
@@ -515,12 +332,8 @@ class MainRouter
     }
 
     /**
-     * Delega una excepción al ErrorHandler compartido.
-     *
-     * Si la respuesta ya fue enviada, el ErrorHandler lo detecta
-     * internamente y solo registra el error sin intentar enviar nada.
-     *
-     * @param \Throwable $e Excepción a manejar.
+     * Intercepta excepciones arrojadas durante el pipeline o la resolución de la ruta
+     * y las deriva al manejador centralizado para un formato de salida consistente.
      */
     private function handleException(\Throwable $e): void {
         $this->errorHandler->handle($e);
@@ -531,27 +344,7 @@ class MainRouter
 
 
 
-// El siguiente nivel sería:
+
 
 // ✅ Request inmutable
-// ✅ Kernel / Application
-// ✅ Service Providers
-// ✅ Middleware globales
-// ✅ Route groups
-// No existe diferenciación entre 404 y 405
 // Las regex se compilan en cada request (cachear)
-
-// . No hay constraints
-// Actualmente:
-// /users/{id}
-
-// acepta:
-// /users/abc
-// /users/123
-// /users/!!!
-
-// Más adelante podrías soportar:
-// /users/{id:\d+}
-
-// para generar:
-// (?P<id>\d+)
