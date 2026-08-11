@@ -1,53 +1,57 @@
 <?php
+
+declare(strict_types=1);
+
 namespace Axiom\Contracts\Database;
 
 /**
- * Defines a contract for database connections.
+ * Define el contrato para las conexiones a la base de datos de Axiom.
  * 
- * This interface abstracts the underlying database driver
- * (mysqli, PDO, etc.) and allows the ORM to remain decoupled
- * from any specific implementation.
+ * Esta interfaz abstrae el controlador subyacente (PDO, mysqli, etc.),
+ * permitiendo que el ORM se mantenga completamente desacoplado de 
+ * cualquier implementación de bajo nivel.
  */
 interface ConnectionInterface { 
+
     /**
-     * Prepares an SQL statement for execution.
+     * Prepara una consulta SQL para su ejecución segura.
      * 
-     * @param string $sql The SQL query to prepare.
+     * @param string $sql La consulta SQL a preparar.
      * @return StatementInterface
      */
     public function prepare(string $sql): StatementInterface;
-
+ 
     /**
-     * Returns the last auto-generated ID from the database.
-     * Used after INSERT operations on tables with AUTO_INCREMENT primary keys.
+     * Devuelve el último ID autogenerado insertado en la base de datos.
+     * Soporta tanto enteros (AUTO_INCREMENT) como cadenas (para UUIDs).
      *
-     * @return int
+     * @return int|string
      */
-    public function lastInsertId(): int;
-
+    public function lastInsertId(): int|string;
 
     /**
-     * Begins a database transaction.
-     * All subsequent queries run inside this transaction until
-     * commit() or rollback() is called.
+     * Inicia una transacción en la base de datos.
+     * 
+     * Todas las consultas posteriores se ejecutarán dentro de esta transacción
+     * hasta que se confirme con commit() o se revierta con rollback().
      *
-     * @throws \RuntimeException If the transaction cannot be started.
+     * @throws \RuntimeException Si la transacción no puede iniciarse.
      */
     public function beginTransaction(): void;
 
     /**
-     * Commits the active transaction.
-     * Persists all changes made since beginTransaction().
+     * Confirma la transacción activa.
+     * Persiste permanentemente todos los cambios realizados desde beginTransaction().
      *
-     * @throws \RuntimeException If there is no active transaction.
+     * @throws \RuntimeException Si no hay una transacción activa.
      */
     public function commit(): void;
 
     /**
-     * Rolls back the active transaction.
-     * Reverts all changes made since beginTransaction().
+     * Revierte la transacción activa.
+     * Deshace todos los cambios realizados desde beginTransaction().
      *
-     * @throws \RuntimeException If there is no active transaction.
+     * @throws \RuntimeException Si no hay una transacción activa.
      */
     public function rollback(): void;
 }

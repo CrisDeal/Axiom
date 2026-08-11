@@ -1,10 +1,11 @@
 <?php
-namespace Axiom\Database;
+namespace Axiom\ORM;
 
 use RuntimeException;
 use InvalidArgumentException;
 use Axiom\Contracts\Database\ConnectionInterface;
 use Axiom\Contracts\Database\StatementInterface;
+use Axiom\Database\ConnectionManager;
 
 /**
  * ActiveRecord
@@ -506,13 +507,4 @@ class ActiveRecord implements \JsonSerializable {
             );
         }
     }
-
-
-
-
- 
-
-
-
-
 }

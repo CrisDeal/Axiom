@@ -1,127 +1,128 @@
 <?php
+
+declare(strict_types=1);
+
 namespace Axiom\Database;
 
 use mysqli; 
+use mysqli_sql_exception;
 use RuntimeException;
 use Axiom\Contracts\Database\ConnectionInterface;
 use Axiom\Contracts\Database\StatementInterface;
 
 /**
- * mysqli implementation of ConnectionInterface.
+ * Implementación de ConnectionInterface utilizando la extensión MySQLi.
  * 
- * This class acts as an adapter between the ORM and the mysqli database driver.
- * 
- * Its responsibility is to:
- *  - Wrap a native mysqli connection.
- *  - Prepare SQL statements.
- *  - Return driver-agnostic statements objects.
- * 
- * IMPORTANT
- * This class contains NO business logic and NO ORM logic.
- * It is purely an Axiom component.
-*/
+ * Actúa como un adaptador (Adapter) para la clase nativa mysqli de PHP.
+ * Está diseñada de forma defensiva para soportar tanto el manejo moderno de 
+ * excepciones (PHP 8.1+) como el comportamiento clásico de retornos booleanos.
+ */
 class MysqliConnection implements ConnectionInterface {
-
-
+    
     /**
-     * Native mysqli connection instance.
+     * @param mysqli $connection Instancia nativa de MySQLi ya conectada.
      * 
-     * This object represents an active connection to
-     * a MySQL database using the mysqli driver.
-     * 
-     * @var mysqli
+     * NOTA PARA DEVS: 
+     * La conexión real a la base de datos (host, usuario, contraseña) DEBE 
+     * realizarse antes de inyectar la dependencia aquí. 
      */
-    private mysqli $connection;
-
-
-    /**
-     * Creates a new MySQLi connection wrapper.
-     * 
-     * @param mysqli $connection An initialized and connected mysqli instance.
-     */
-    public function __construct(mysqli $connection) {
-    if ($connection->connect_errno) {
-        throw new \RuntimeException(
-            'Error connecting to database: ' . $connection->connect_error
-        );
-    }    
-    $this->connection = $connection;
+    public function __construct(
+        private mysqli $connection
+    ) {
+        // Mantenemos la validación manual (connect_errno) por si el framework 
+        // se ejecuta en un entorno donde el reporte estricto de MySQLi 
+        // (MYSQLI_REPORT_STRICT) fue desactivado intencionalmente.
+        if ($this->connection->connect_errno) {
+            throw new RuntimeException(
+                'Error al conectar a la base de datos (Mysqli): ' . $this->connection->connect_error
+            );
+        }    
     }
 
-
     /**
-     * Prepares an SQL statement for execution.
-     * 
-     * This method delegates the preparation of the SQL query
-     * to the underlying mysqli driver and wraps the resulting
-     * mysqli_stmt inside a StatementInterface implementation.
-     * 
-     * @param string $sql The SQL query to prepare.
-     * @return StatementInterface A prepared, driver-agnostic statement.
-     * @throws RuntimeException If the SQL statement cannot be prepared.
+     * Prepara una consulta SQL y devuelve un Statement de Axiom.
+     *
+     * @param string $sql La consulta SQL con marcadores de posición (?).
+     * @return StatementInterface Instancia de MysqliStmt.
+     * @throws RuntimeException Si hay un error de sintaxis o la consulta es rechazada.
      */
     public function prepare(string $sql) : StatementInterface {
-        $stmt = $this->connection->prepare($sql);
-
-        if($stmt === false) {
+        try {
+            $stmt = $this->connection->prepare($sql);
+            
+            // Fallback defensivo: Si el modo de reporte no lanza excepciones,
+            // prepare() devolverá false en caso de error.
+            if ($stmt === false) {
+                throw new RuntimeException(
+                    'Error al preparar la consulta SQL (Mysqli): ' . $this->connection->error
+                );
+            }
+            
+            // Retornamos el wrapper del statement, no el objeto mysqli_stmt nativo.
+            return new MysqliStmt($stmt);
+            
+        } catch (mysqli_sql_exception $e) {
+            // Unificamos las excepciones nativas bajo el estándar de Axiom.
             throw new RuntimeException(
-                'Error preparing SQL (Mysqli): ' . $this->connection->error
+                'Excepción al preparar la consulta SQL (Mysqli): ' . $e->getMessage(),
+                (int) $e->getCode(),
+                $e
             );
         }
-
-        return new MysqliStmt($stmt);
     }
 
-
     /**
-     * Returns the last auto-generated ID from the database.
+     * Obtiene el ID generado por la última operación INSERT.
      *
-     * Used after INSERT operations on tables with AUTO_INCREMENT
-     * primary keys.
-     *
-     * @return int
+     * @return int|string
      */
-    public function lastInsertId(): int
+    public function lastInsertId(): int|string
     {
-        return (int) $this->connection->insert_id;
+        return $this->connection->insert_id;
     }
 
     /**
-     * Begins a database transaction.
+     * Inicia una transacción de base de datos.
      *
-     * @throws \RuntimeException If the transaction cannot be started.
+     * @throws RuntimeException Si el motor de base de datos rechaza iniciar la transacción.
      */
     public function beginTransaction(): void {
-        if (!$this->connection->begin_transaction()) {
-            throw new \RuntimeException(
-                'Error starting transaction: ' . $this->connection->error
-            );
+        try {
+            if (!$this->connection->begin_transaction()) {
+                throw new RuntimeException('No se pudo iniciar la transacción en la base de datos: ' . $this->connection->error);
+            }
+        } catch (mysqli_sql_exception $e) {
+            throw new RuntimeException('Error al iniciar transacción en la base de datos: ' . $e->getMessage(), (int) $e->getCode(), $e);
         }
     }
 
     /**
-     * Commits the active transaction.
+     * Confirma la transacción actual, guardando los cambios permanentemente.
      *
-     * @throws \RuntimeException If the commit fails.
+     * @throws RuntimeException Si el commit falla a nivel del driver.
      */
     public function commit(): void {
-        if (!$this->connection->commit()) {
-            throw new \RuntimeException(
-                'Error committing transaction: ' . $this->connection->error
-            );
+        try {
+            if (!$this->connection->commit()) {
+                throw new RuntimeException('No se pudo confirmar (commit) la transacción: ' . $this->connection->error);
+            }
+        } catch (mysqli_sql_exception $e) {
+            throw new RuntimeException('Error al hacer commit en la transacción: ' . $e->getMessage(), (int) $e->getCode(), $e);
         }
     }
 
     /**
-     * Rolls back the active transaction.
+     * Revierte la transacción actual, descartando los cambios realizados.
      *
-     * @throws \RuntimeException If the rollback fails.
+     * @throws RuntimeException Si el rollback falla a nivel del driver.
      */
     public function rollback(): void {
-        if (!$this->connection->rollback()) {
-            throw new \RuntimeException(
-                'Error rolling back transaction: ' . $this->connection->error
-            );
+        try {
+            if (!$this->connection->rollback()) {
+                throw new RuntimeException('No se pudo revertir (rollback) la transacción: ' . $this->connection->error);
+            }
+        } catch (mysqli_sql_exception $e) {
+            throw new RuntimeException('Error al hacer rollback en la transacción: ' . $e->getMessage(), (int) $e->getCode(), $e);
         }
     }
 }

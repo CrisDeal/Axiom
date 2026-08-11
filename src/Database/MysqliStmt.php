@@ -1,127 +1,141 @@
 <?php
+
+declare(strict_types=1);
+
 namespace Axiom\Database;
 
 use mysqli_stmt;
+use mysqli_sql_exception;
 use RuntimeException;
 use Axiom\Contracts\Database\StatementInterface;
 
- 
 /**
- * mysqli implementation of StatementInterface.
- * 
- * This class acts as an adapter, wrapping the native mysqli_stmt object.
- * It provides a clean, object-oriented API for binding parameters,
- * executing queries, and fetching results without exposing the undearlying
- * MySQLi driver specifics to the rest of the application.
+ * Implementación de StatementInterface utilizando MySQLi.
+ *
+ * Envuelve un mysqli_stmt nativo, gestionando el enlace dinámico de 
+ * parámetros por tipos y previniendo fugas de memoria.
  */
 class MysqliStmt implements StatementInterface {
+
     /**
-     * The native MySQLi statement instance.
+     * Crea un nuevo wrapper para el statement de Mysqli.
      * 
-     * @var mysqli_stmt
+     * @param mysqli_stmt $stmt Instancia del statement preparado de MySQLi.
      */
-    private mysqli_stmt $stmt;
-
-
-    /**
-     * Initializes the statement adapter.
-     * 
-     * @param mysqli_stmt $stmt A successfully prepared native MySQLi statement.
-     */
-    public function __construct(mysqli_stmt $stmt) {
-        $this->stmt = $stmt;
-    }
-
+    public function __construct(
+        private mysqli_stmt $stmt
+    ) {}
 
     /**
-     * Binds parameters to the prepared statement dynamically.
+     * Enlaza parámetros a la consulta preparándolos por tipo de dato.
      * 
-     * Automatically infers the correct MySQLi type binding ('i' for integers,
-     * 'd' for doubles/floats, 's' for strings) based on the provided PHP values.
-     * 
-     * @params array<int|string, mixed> $params The parameters to bind.
-     * @return void
-     * @throws RuntimeException If the parameter binding process fails.
+     * @param array<int|string, mixed> $params
+     * @throws RuntimeException Si el enlace falla.
      */
     public function bind(array $params) : void {
         if(empty($params)) {
             return;
         }
 
+        // PRECAUCIÓN: MySQLi solo entiende signos de interrogación (?), por lo que 
+        // el orden estricto importa. Extraemos solo los valores numéricamente indexados 
+        // por si el ORM nos envió un array asociativo.
+        $values = array_values($params);
+
         $types = '';
-        foreach($params as $param) {
+        foreach($values as $param) {
             $types .= match(true) {
                 is_int($param), is_bool($param) => 'i',
-                is_float($param) => 'd',
-                default => 's',
+                is_float($param) => 'd', // 'd' de double
+                default => 's', // 's' de string, cubre nulos y textos
             };
         }
 
-        if(!$this->stmt->bind_param($types, ...$params)) {
-            throw new RuntimeException(
-                'Error binding params: ' . $this->stmt->error
-            );
+        try {
+            // Desempaquetamos los valores ordenados (...$values)
+            if(!$this->stmt->bind_param($types, ...$values)) {
+                throw new RuntimeException('Error al enlazar parámetros (Mysqli): ' . $this->stmt->error);
+            }
+        } catch (mysqli_sql_exception $e) {
+            throw new RuntimeException('Excepción al enlazar parámetros: ' . $e->getMessage(), (int) $e->getCode(), $e);
         }
     }
 
-
     /**
-     * Executes the prepared statement.
+     * Ejecuta la consulta en la base de datos.
      * 
-     * @return bool True on success.
-     * @throws RuntimeException If the execution fails at the database level.
+     * @return bool
+     * @throws RuntimeException Si la ejecución falla a nivel del driver.
      */
     public function execute() : bool {
-        if(!$this->stmt->execute()) {
-            throw new RuntimeException(
-                'Error executing Mysqli statement: ' . $this->stmt->error
-            );
+        try {
+            if(!$this->stmt->execute()) {
+                throw new RuntimeException('Error al ejecutar consulta (Mysqli): ' . $this->stmt->error);
+            }
+            return true;
+        } catch (mysqli_sql_exception $e) {
+            throw new RuntimeException('Excepción al ejecutar consulta: ' . $e->getMessage(), (int) $e->getCode(), $e);
         }
-
-        return true;
     }
 
-
     /**
-     * Fetches all rows from the executed statement.
-     * 
-     * If the statement was a write operation (INSERT, UPDATE, DELETE)
-     * which does not yield a result set, it safely returns an empty array.
-     * 
-     * @return array<int, array<string, mixed>> An array of associative
-     * arrays representing the rows.
+     * Devuelve todos los resultados. Úsalo solo para colecciones pequeñas.
+     *
+     * @return array<int, array<string, mixed>>
      */
     public function fetchAll() : array {
         $result = $this->stmt->get_result();
         
+        // Operaciones como INSERT/UPDATE devuelven false al no generar tabla de resultados.
         if($result === false) {
             return [];
         }
 
-        return $result->fetch_all(MYSQLI_ASSOC);
+        $data = $result->fetch_all(MYSQLI_ASSOC);
+        $result->free(); // Liberamos memoria explícitamente en C/MySQL.
+        
+        return $data;
     }
 
+    /**
+     * Iterador de memoria eficiente para leer miles de registros.
+     * 
+     * @return \Generator<int, array<string, mixed>>
+     */
+    public function fetch() : \Generator {
+        $result = $this->stmt->get_result();
+        
+        if ($result !== false) {
+            while ($row = $result->fetch_assoc()) {
+                yield $row;
+            }
+            $result->free();
+        }
+    }
 
     /**
-     * Fetches the first row from the executed statement.
-     * 
-     * @return array<string, mixed>|null The associative
-     * array of the first row, or null if no results.
+     * Extrae de forma eficiente un único registro, sin cargar el resto.
+     *
+     * @return array<string, mixed>|null
      */
     public function fetchOne() : ?array {
-        $result = $this->fetchAll();
-        return $result[0] ?? null;
-    }
+        $result = $this->stmt->get_result();
+        
+        if($result === false) {
+            return null;
+        }
 
+        // fetch_assoc devuelve el primer arreglo o null/false si está vacío
+        $row = $result->fetch_assoc();
+        $result->free();
+
+        return $row ?: null;
+    }
 
     /**
-     * Retrieves the number of rows affected by the last execution.
-     * 
-     * Useful for verifying the impact of INSERT, UPDATE, or DELETE operations.
-     * 
-     * @return int The number of affected rows.
+     * @return int
      */
     public function affectedRows() : int {
-        return $this->stmt->affected_rows;
+        return (int) $this->stmt->affected_rows;
     }
-} 
+}
