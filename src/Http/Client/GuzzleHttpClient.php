@@ -1,164 +1,90 @@
 <?php
+declare(strict_types=1);
+
 namespace Axiom\Http\Client;
 
 use Axiom\Contracts\Http\HttpClientInterface;
 use GuzzleHttp\Client;
 use GuzzleHttp\Exception\RequestException;
+use InvalidArgumentException;
 
 /**
- * GuzzleHttpClient
- *
- * Implementacion de HttpClientInterface usando Guzzle como transporte HTTP.
- *
- * Implementa el patron inmutable - cada metodo de configuracion retorna
- * un clon modificado sin alterar la  instancia original. Esto permite
- * reutilizar una instancia base con diferentes configuraciones:
- *
- *  $base = $client->baseUrl('https://api.example.com')->withToken($token);
- *  $response1 = $base->get('/users/1');              // usa baseUrl y token
- *  $response2 = $base->timeout(30)->get('/users/2'); // Agrega timeout sin afectar $base
- *
- * Registro en el contenedor:
- *  $container->singleton(HttpClientInterface::class, fn() => new GuzzleHttpClient(
- *      new Client(['timeout' => 10])
- *  ));
+ * Implementación del cliente HTTP de Axiom utilizando Guzzle como motor interno (Patrón Adapter).
+ * 
+ * Esta clase es INMUTABLE. Cada método de configuración devuelve un clon (clone $this)
+ * para garantizar que las peticiones no compartan estado accidentalmente si el cliente
+ * se utiliza como un Singleton dentro del contenedor de dependencias.
  */
 class GuzzleHttpClient implements HttpClientInterface {
 
-    /**
-     * Headers globales enviados en todas las peticiones.
-     * @var array<string, string>
-     */
-    private array $headers = [];
+    private ?string $baseUrl     = null;
+    private array   $headers     = [];
+    private array   $query       = [];
+    private bool    $encodeQuery = true; // Por defecto, sí codificamos (es lo estándar y seguro)
+    private int     $timeout     = 10;
+    private int     $retries     = 0;
+    private int     $retryDelay  = 0;
 
     /**
-     * Query params globales fusionados en cada peticion.
-     * Los params especificos de get() tienen precedencia sobre estos.
-     * @var array<string, mixed>
+     * Define cómo se codificará el cuerpo (body) de las peticiones POST/PUT/PATCH.
+     * Por defecto, las APIs modernas utilizan JSON.
      */
-    private array $query = [];
+    private string  $bodyFormat = 'json';
 
     /**
-     * Segundos antes de timeout. Por defecto 10 segundos.
-     * @var int
-     */
-    private int $timeout = 10;
-
-    /**
-     * Numero maximo de reintentos en cada caso de fallo de red (5xx o excepcion de conexion).
-     * Por defecto 0 (no reintentar).
-     * @var int
-     */
-    private int $retries = 0;
-
-    /**
-     * Milisegundos de espera entre reintentos. Por defecto 0 (reintentos inmediatos).
-     * @var int
-     */
-    private int $retryDelay = 0;
-
-    /**
-     * URL base antepuesta a todas las peticiones. Ejemplo: 'https://api.example.com'.
-     * Si se establece, las rutas pasadas a get(), post(), etc se concatenan a esta URL base.
-     * @var string|null
-     */
-    private ?string $baseUrl = null;
-
-    /**
-     * @param Client $client Instancia de GuzzleHttp\Client configurada.
+     * @param Client $client Cliente base de Guzzle (inyectado para facilitar Testing/Mocks)
      */
     public function __construct(
         private Client $client
     ) {}
 
     /**
-     * Define la URL base para todas las peticiones.
-     * Se antepone automaticamente a la URL de cada metodo HTTP.
-     *
-     * Ejemplo:
-     *  $client->baseUrl('https://api.example.com')->get('/users');
-     *  // Llama a https://api.example.com/users
+     * @inheritDoc
+     * 
+     * NOTA ARQUITECTÓNICA: Todos los métodos de configuración usan `clone $this`.
+     * Esto hace que el cliente sea INMUTABLE. Así evitamos que si inyectamos este 
+     * cliente de forma global, la petición 'A' afecte accidentalmente a la petición 'B'.
      */
     public function baseUrl(string $url): static {
         $cloned          = clone $this;
-        $cloned->baseUrl = rtrim($url, '/');
+        $cloned->baseUrl = rtrim($url, '/'); // Previene doble slash (//) al armar la URL final
         return $cloned;
     }
 
-    /**
-     * Agrega headers globales fucionandolos con los existentes.
-     * Se enviarn en todas las peticiones del cliente.
-     *
-     * @param array<string, string> $headers
-     * @return static
-     */
     public function withHeaders(array $headers): static {
         $cloned          = clone $this;
+        // Mezclamos conservando los anteriores y añadiendo/sobrescribiendo los nuevos
         $cloned->headers = array_merge($cloned->headers, $headers);
         return $cloned;
     }
 
-    /**
-     * Agrega el token Bearer al header Authorization.
-     * Equivalente a withHeaders(['Authorization' => 'Bearer {$token}']).
-     *
-     * Ejemplo:
-     *  $client->withToken('$jwtToken')->get('/profile');
-     *
-     * @param string $token Token de autenticacion.
-     * @return static Para encadenamiento fluido de metodos.
-     */
     public function withToken(string $token): static {
         return $this->withHeaders([
             'Authorization' => 'Bearer ' . $token
         ]);
     }
 
-    /**
-     * Agrega query params globales para todas las peticiones.
-     * Los params pasados directamente en get(), tienen precedencia sobre estos en caso de conflicto.
-     *
-     * Util para params que van en cada peticion: api_key, version, localez, etc.
-     * Ejemplo:
-     * $client->withQuery(['version' => 'v2'])->get('/users');
-     *
-     * @param array<string, mixed> $query
-     * @return static
-     */
     public function withQuery(array $query): static {
         $cloned        = clone $this;
         $cloned->query = array_merge($cloned->query, $query);
         return $cloned;
     }
 
-    /**
-     * Define el tiempo maximo de espera para la peticion en segundos.
-     * Si la peticion supera este tiempo lanzara una excepcion de timeout.
-     *
-     * Ejemplo:
-     *  $client->timeout(10)->get('/data'); // Timeout despues de 10 segundos
-     *
-     * @param int $seconds Segundos antes de timeout.
-     * @return static Para encadenamiento fluido de metodos.     *
-     */
+    public function withoutQueryEncoding(): static {
+        $cloned = clone $this;
+        $cloned->encodeQuery = false;
+        return $cloned;
+    }
+
     public function timeout(int $seconds): static {
         $cloned          = clone $this;
         $cloned->timeout = $seconds;
         return $cloned;
     }
 
-    /**
-     * Configura reintentos autoamaticos en cada fallo de red.
-     * Solo reintenta cuando no hay respuesta del servidor (error de conexion).
-     * Las respuestas 4xx y 5xx no se reintentan - se retornan como HttpResponse.
-     *
-     * @param int $times Numero maximo de reintentos.
-     * @param int $delayMs Milisegundos de espera entre reintentos. Por defecto 0.
-     * @throws \InvalidArgumentException Si $times es negativo.
-     */
     public function retry(int $times, int $delayMs): static {
         if ($times < 0) {
-            throw new \InvalidArgumentException('El numero de reintentos debe ser >= 0.');
+            throw new InvalidArgumentException('El numero de reintentos debe ser mayor o igual a 0.');
         }
 
         $cloned             = clone $this;
@@ -167,140 +93,143 @@ class GuzzleHttpClient implements HttpClientInterface {
         return $cloned;
     }
 
-    /**
-     * Ejecuta una peticion GET.
-     * Los $query pasados aqui tienen precedencia sobre los definidos en withQuery().
-     *
-     * @param string $url Ruta o URL completa del recurso.
-     * @param array<string, mixed> $query Query params especificas de cada peticion.
-     * @return HttpResponse Respuesta de la peticion.
-     */
-    public function get(string $url, array $query = [], bool $rawQuery = false): HttpResponse {
-        if ($rawQuery) {
-            $pairs = [];
-            foreach ($query as $key => $value) {
-                $pairs[] = $key . '=' . $value;
-            }
 
-            $url .= '?' . implode('&', $pairs);
+    // --- MÉTODOS DE FORMATO (CONTENT NEGOTIATION) ---
 
-            return $this->send('GET', $url);
-        }
-
-        return $this->send('GET', $url, [
-            'query' => $query
-        ]);
+    public function asJson(): static {
+        $cloned = clone $this;
+        $cloned->bodyFormat = 'json';
+        return $cloned;
     }
 
-    /**
-     * Ejecuta una peticion POST con body JSON.
-     * Los $data pasados aqui se envian en el body de la peticion.
-      *
-      * @param string $url Ruta o URL completa del recurso.
-      * @param array<string, mixed> $data Datos a enviar en el body de la peticion.
-      * @return HttpResponse Respuesta de la peticion.
-     */
-    public function post(string $url, array $data = [], string $type = 'json'): HttpResponse {
-        return $this->send('POST', $url, [$type => $data]);
+    // application/x-www-form-urlencoded
+    public function asForm(): static {
+        $cloned = clone $this;
+        $cloned->bodyFormat = 'form_params'; 
+        return $cloned;
     }
 
-    /**
-     * Ejecuta una peticion PUT con body JSON.
-     * Reemplaza completamente el recurso existente en el servidor.
-     *
-     * @param string $url Ruta o URL completa del recurso.
-     * @param array<string, mixed> $data Datos a enviar en el body de la peticion.
-     * @return HttpResponse Respuesta de la peticion.
-     */
+    // multipart/form-data (para archivos/imágenes)
+    public function asMultipart(): static {
+        $cloned = clone $this;
+        $cloned->bodyFormat = 'multipart'; 
+        return $cloned;
+    }
+
+    public function accept(string $contentType): static {
+        return $this->withHeaders(['Accept' => $contentType]);
+    }
+
+    public function acceptJson(): static {
+        return $this->withHeaders(['Accept' => 'application/json']);
+    }
+
+    // --- VERBOS HTTP (EJECUCIÓN) ---
+    public function get(string $url, array $query = []): HttpResponse {
+        return $this->send('GET', $url, ['query' => $query]);
+    }
+
+    // Delegamos los datos al motor central; él sabrá cómo empaquetarlos según el bodyFormat
+    public function post(string $url, array $data = []): HttpResponse {
+        return $this->send('POST', $url, [], $data);
+    }
+
     public function put(string $url, array $data = []): HttpResponse {
-        return $this->send('PUT', $url, ['json' => $data]);
+        return $this->send('PUT', $url, [], $data);
     }
 
-    /**
-     * Ejecuta una peticion PATCH con body JSON.
-     * Actualiza parcialmente el recurso existente en el servidor.
-     *
-     * @param string $url Ruta o URL completa del recurso.
-     * @param array<string, mixed> $data Datos a enviar en el body de la peticion.
-     * @return HttpResponse Respuesta de la peticion.
-     */
     public function patch(string $url, array $data = []): HttpResponse {
-        return $this->send('PATCH', $url, ['json' => $data]);
+        return $this->send('PATCH', $url, [], $data);
     }
 
-    /**
-     * Ejecuta una peticion DELETE.
-     *
-     * @param string $url Ruta o URL completa del recurso.
-     * @param array<string, mixed> $data Datos a enviar en el body de la peticion.
-     * @return HttpResponse Respuesta de la peticion.
-     */
     public function delete(string $url, array $data = []): HttpResponse {
-        return $this->send('DELETE', $url, ['json' => $data]);
+        return $this->send('DELETE', $url, [], $data);
     }
 
-    /**
-     * Ejecuta la peticion HTTP con logica re reintento.
-     *
-     * Solo reintenta en errores de red (sin respuesta del servidor).
-     * Las respuestas 4xx y 5xx se retornan como HttpResponse - el caller
-     * decide si lanzar una excepcion con ->throw().
-     *
-     * La precedencia de query params es:
-     * params de get() > params de withQuery() (globales).
-     *
-     * @param string $method Metodo HTTP (GET, POST, etc).
-     * @param string $url Ruta o URL completa del recurso.
-     * @param array $options Opciones adicionales para Guzzle (headers, json, query, etc).
-     * @return HttpResponse Respuesta de la peticion.     *
+ /**
+     * Motor central donde se preparan y ejecutan todas las peticiones hacia Guzzle.
+     * 
+     * @param string $method Método HTTP (GET, POST, etc.)
+     * @param string $url URL destino
+     * @param array $options Configuraciones de la petición (queries específicas, headers)
+     * @param array $data Cuerpo de la petición (si aplica)
      */
-    private function send(string $method, string $url, array $options = []): HttpResponse {
+    private function send(string $method, string $url, array $options = [], array $data = []): HttpResponse {
+        // 1. Construcción de la URL segura
         if($this->baseUrl) {
             $url = $this->baseUrl . '/' . ltrim($url, '/');
         }
 
-        if (empty($options['query'])) {
-            unset($options['query']);
+        // Fusión de Query Parameters (Específicos sobreescriben a Globales)
+        $mergedQuery = array_merge($this->query, $options['query'] ?? []);
+        if (!empty($mergedQuery)) {
+            if ($this->encodeQuery) {
+                // Comportamiento normal: Guzzle recibe el array y hace el URL-encode seguro
+                $options['query'] = $mergedQuery; 
+            } else {
+                // Armamos el string manualmente sin urlencode.
+                // Al pasarle un STRING a Guzzle en 'query', este NO lo codifica.
+                $pairs = [];
+                foreach ($mergedQuery as $key => $value) {
+                    if (is_array($value)) {
+                        // Opción: Unir con comas (ej. ids=1,2,3) o saltarlo
+                        $value = implode(',', $value);
+                    }
+                    $pairs[] = $key . '=' . $value;
+                }
+                $options['query'] = implode('&', $pairs); 
+            }
         } else {
-            // Params de la peticion tienen precedencia sobre los globales.
-            $options['query'] = array_merge(
-                $this->query,           // globales - base.
-                $options['query'] ?? [] // especificos - sobreescriben.
-            );          
+            unset($options['query']);
         }
 
+        // Fusión de Headers (Específicos sobreescriben a Globales)
         $options['headers'] = array_merge(
+            $this->headers,
             $options['headers'] ?? [],
-            $this->headers
         );
 
+        // Inyección del Body según el formato configurado
+        if (!empty($data)) {
+            // Guzzle inyectará los datos automáticamente interpretando la llave (json, form_params, multipart)
+            $options[$this->bodyFormat] = $data; 
+        }
+
         $options['timeout']     = $this->timeout;
-        $options['http_errors'] = false; // Evitar excepciones automáticas de Guzzle para devolver siempre HttpResponse
+
+        // Desactivamos excepciones en errores de servidor (4xx y 5xx). 
+        // El desarrollador debe recibir el HttpResponse y decidir cómo manejarlos en su lógica de negocio.
+        $options['http_errors'] = false;
 
         $attempts = 0;
 
+        // Loop para la política de reintentos (Retries)
         do {
             try {
                 $response = $this->client->request($method, $url, $options);                
 
+                // Retornamos nuestro propio objeto, desacoplando a Axiom de Guzzle
                 return new HttpResponse(
                     $response->getStatusCode(),
                     (string) $response->getBody(),
                     $response->getHeaders()
                 );
             } catch (RequestException $e) {
-                // RequestException solo ocurre en fallos de red/conexion.
-                // Con http_errors=false, las respuestas 4xx/5xx no llegan aqui.
+                // RequestException se lanza solo en fallos físicos de red (Timeout, DNS, etc.)
                 $attempts++;
 
                 if($attempts > $this->retries) {
-                    throw $e; // Excedio reintentos, lanzar excepcion al caller.
+                    throw $e; // Excedio reintentos, lanzar excepcion hacia arriba para que el desarrollador la maneje
                 }
 
+                // Esperamos antes de reintentar
                 if($this->retryDelay > 0) {
-                    usleep($this->retryDelay * 1000);
+                    usleep($this->retryDelay * 1000); // usleep usa microsegundos
                 }
             }
         } while($attempts <= $this->retries);
+
+        // Satisfacer el análisis estático
+        throw new \LogicException('Unreachable code in HTTP Client send method.');
     }
 }

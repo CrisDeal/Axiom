@@ -1,152 +1,165 @@
 <?php
+declare(strict_types=1);
+
 namespace Axiom\Contracts\Http;
 
 use Axiom\Http\Client\HttpResponse;
+use RuntimeException;
 
 /**
- * HttpClientInterface
+ * Contrato para el cliente HTTP de Axiom.
  * 
- * Contrato para clientes HTTP en Axiom.
- * Define una API fluida para construir y ejecutar peticiones HTTP
- * de forma expresiva, independientemente de la libreria subyacente.
- * 
- * La implementacion por defecto usa Guzzle internamente,
- * pero cualquier libreria puede usarse implementando esta interfaz.
- * 
- * Uso basico:
- * $response = $client->baseUrl('https://api.example.com')
- *                  ->withToken($token)
- *                  ->timeout(30)
- *                  ->retry(3, 1000)
- *                  ->get('/users);
- * 
- * $response->json();       // array con la respuesta JSON
- * $response->status();     // HTTP status code
- * $response->successful(); // true si status 2xx *  
+ * Diseñado bajo el patrón de Interfaz Fluida (Fluent API).
+ * Los métodos de configuración devuelven la propia instancia (`static`) 
+ * para permitir el encadenamiento antes de ejecutar la petición.
  */
 interface HttpClientInterface {
 
     /**
-     * Define la URL base para todas las peticiones del cliente.
-     * Se antepone automaticamente a la URL de cada metodo HTTP.
-     * 
-     * Ejemplo:
-     *  $client->baseUrl('https://api.example.com')->get('/users');
-     *  // Llama a https://api.example.com/users
-     * 
-     * @param  astring $url URL base. Ejemplo: 'https://api.example.com'
-     * @return static       Para encadenamiento fluido de metodos.
+     * Establece la URL base para todas las peticiones de esta instancia.
+     *
+     * @param string $url URL base (ej. 'https://api.ejemplo.com/v1')
+     * @return static
      */
     public function baseUrl(string $url): static;
     
     /**
-     * Agrega headers personalizados a la peticion.
-     * Se fusionan con los headers existentes - no los reemplazan.
-     * 
-     * Ejemplo:
-     *   $client->withHeaders(['X-API-Key' => 'secret', 'Accept' => 'application/json']);
-     * 
-     * @param  array<string, string> $headers Headers personalizados.
-     * @return static              Para encadenamiento fluido de metodos.
+     * Agrega o sobrescribe los encabezados HTTP para la petición.
+     *
+     * @param array<string, string> $headers Arreglo asociativo de encabezados
+     * @return static
      */
     public function withHeaders(array $headers): static;
 
     /**
-     * Agrega un token Bearer al header Authorization.
-     * Equivalente a withHeaders(['Authorization' => 'Bearer {token}']).
-     * 
-     * Ejemplo:
-     *  $client->withToken('$jwtToken')->get('/profile');
-     * 
-     * @param  string $token Token de autenticacion.
-     * @return static        Para encadenamiento fluido de metodos.
+     * Helper para configurar la autorización mediante un Bearer Token.
+     *
+     * @param string $token Token de acceso
+     * @return static
      */
     public function withToken(string $token): static;
     
     /**
-     * Agrega query parameters blobales a todas las peticiones.
-     * Se fusionan con los query params pasados directamente en get().
-     * 
-     * Ejemplo:
-     *  $client->withQuery(['version' => 'v2'])->get('/users');
-     *  // Llama a /users?version=v2
-     * 
-     * @param array<string, mixed> $query Parametros a agrupar.
-     * @return static              Para encadenamiento fluido de metodos.
+     * Agrega parámetros globales a la cadena de consulta (query string).
+     * Se combinarán con los parámetros específicos de cada petición.
+     *
+     * @param array<string, mixed> $query Parámetros de consulta
+     * @return static
      */
     public function withQuery(array $query): static;
 
     /**
-     * Define el tiempo maximo de espera para la peticion en segundos.
-     * Si la peticiones supera este tiempo, lanza una excepcion.
-     * 
-     * Ejemplo:
-     *  $client->timeout(10)->get('/data'); // Timeout despues de 10 segundos
-     * 
-     * @param  int $seconds Tiempo maximo de espera en segundos.
-     * @return static       Para encadenamiento fluido de metodos. Por defecto 10 segundos.
+     * Desactiva la codificación URL (URL-encoding) estricta para los parámetros de consulta.
+     * Útil para APIs legacy que no soportan caracteres codificados (ej. comas %2C).
+     *
+     * @return static
+     */
+    public function withoutQueryEncoding(): static;
+
+    /**
+     * Define el tiempo máximo de espera para la conexión y ejecución.
+     *
+     * @param int $seconds Tiempo en segundos
+     * @return static
      */
     public function timeout(int $seconds): static;
 
     /**
-     * Configura reintentos automaticos en cada fallo.
-     * Solo reintenta en errores de conexion o respuestas 5xx.
-     * 
-     * Ejemplo:
-     *  $client->retry(3, 200)->get('/unstable-endpoint');
-     *  // Reintenta hasta 3 veces con un retraso de 200ms entre intentos.
-     * 
-     * @param  int    $times   Numero maximo de intentos.
-     * @param  int    $delayMs Milisegundos de espera entre reintentos.
-     * @return static          Para encadenamiento fluido de metodos.
+     * Configura la política de reintentos en caso de fallos de red o errores 5xx.
+     *
+     * @param int $times Cantidad máxima de reintentos
+     * @param int $delayMs Tiempo de espera entre reintentos en milisegundos
+     * @return static
      */
     public function retry(int $times, int $delayMs): static;
 
     /**
-     * Ejecuta una peticion GET.
-     * 
-     * @param string               $url   Ruta o URL completa del recurso.
-     * @param array<string, mixed> $query Query params adicionales.
-     * @return HttpResponse               Respuesta de la peticion.
+     * Indica que los datos de la petición (body) se enviarán como JSON (application/json).
+     * Suele ser el formato por defecto en APIs modernas.
+     *
+     * @return static
      */
-    public function get(string $url, array $query = [], bool $rawQuery = false): HttpResponse;
+    public function asJson(): static;
 
     /**
-     * Ejecuta una peticion POST con body JSON.
-     * 
-     * @param string               $url   Ruta o URL completa del recurso.
-     * @param array<string, mixed> $data  Datos a enviar en el body de la peticion.
-     * @return HttpResponse               Respuesta de la peticion.
+     * Indica que los datos de la petición se enviarán como un formulario web tradicional 
+     * (application/x-www-form-urlencoded).
+     *
+     * @return static
+     */
+    public function asForm(): static;
+
+    /**
+     * Indica que los datos de la petición se enviarán en múltiples partes (multipart/form-data).
+     * Obligatorio cuando se envían archivos físicos o imágenes.
+     *
+     * @return static
+     */
+    public function asMultipart(): static;
+
+    /**
+     * Define el tipo de contenido que se espera recibir del servidor (Header 'Accept').
+     * Ayuda a prevenir que el servidor devuelva HTML cuando se espera otro formato.
+     *
+     * @param string $contentType Ej. 'text/html', 'application/xml'
+     * @return static
+     */
+    public function accept(string $contentType): static;
+
+    /**
+     * Helper para indicar que se espera estrictamente una respuesta en formato JSON.
+     *
+     * @return static
+     */
+    public function acceptJson(): static;
+
+    /**
+     * Ejecuta una petición HTTP GET.
+     *
+     * @param string $url Ruta o URL completa a solicitar
+     * @param array<string, mixed> $query Parámetros de consulta específicos para esta petición
+     * @return HttpResponse
+     * @throws RuntimeException En caso de fallos de red o si se exceden los reintentos
+     */
+    public function get(string $url, array $query = []): HttpResponse;
+
+    /**
+     * Ejecuta una petición HTTP POST.
+     *
+     * @param string $url Ruta o URL completa
+     * @param array<string, mixed> $data Datos a enviar en el cuerpo de la petición
+     * @return HttpResponse
+     * @throws RuntimeException
      */
     public function post(string $url, array $data = []): HttpResponse;
 
-        /**
-     * Ejecuta una peticion PUT con body JSON.
-     * Reemplaza completamente el recurso existente en el servidor.
-     * 
-     * @param string               $url   Ruta o URL completa del recurso.
-     * @param array<string, mixed> $data  Datos a enviar en el body de la peticion.
-     * @return HttpResponse               Respuesta de la peticion.
+    /**
+     * Ejecuta una petición HTTP PUT para reemplazar un recurso.
+     *
+     * @param string $url Ruta o URL completa
+     * @param array<string, mixed> $data Datos a actualizar
+     * @return HttpResponse
+     * @throws RuntimeException
      */
     public function put(string $url, array $data = []): HttpResponse;
 
     /**
-     * Ejecuta una peticion PATCH con body JSON.
-     * Actualiza parcialmente el recurso existente en el servidor.
-     * 
-     * @param string               $url   Ruta o URL completa del recurso.
-     * @param array<string, mixed> $data  Datos a enviar en el body de la peticion.
-     * @return HttpResponse               Respuesta de la peticion.
+     * Ejecuta una petición HTTP PATCH para actualizar parcialmente un recurso.
+     *
+     * @param string $url Ruta o URL completa
+     * @param array<string, mixed> $data Datos parciales a actualizar
+     * @return HttpResponse
+     * @throws RuntimeException
      */
     public function patch(string $url, array $data = []): HttpResponse;
 
     /**
-     * Ejecuta una peticion DELETE.
-     * 
-     * @param string               $url   Ruta o URL completa del recurso.
-     * @param array<string, mixed> $data  Datos a enviar en el body de la peticion.
-     * @return HttpResponse               Respuesta de la peticion.
+     * Ejecuta una petición HTTP DELETE.
+     *
+     * @param string $url Ruta o URL completa
+     * @param array<string, mixed> $data Datos opcionales para enviar con la eliminación
+     * @return HttpResponse
+     * @throws RuntimeException
      */
     public function delete(string $url, array $data = []): HttpResponse;
-
 }
